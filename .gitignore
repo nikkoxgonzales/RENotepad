@@ -1,0 +1,16 @@
+# Build output
+target/
+dist/
+
+# Downloaded tools (Inno Setup, Ghidra, REA): fetched on demand
+.tools/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+*.bak

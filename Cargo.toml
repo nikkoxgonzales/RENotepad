@@ -1,0 +1,57 @@
+[package]
+name = "renotepad"
+version = "0.3.0"
+edition = "2021"
+authors = ["Nikko Gonzales"]
+description = "RE:Notepad: Windows 10 Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look. Dark by default, nothing else added."
+license = "MIT"
+repository = "https://github.com/nikkoxgonzales/RENotepad"
+publish = false
+
+[[bin]]
+name = "RENotepad"
+path = "src/main.rs"
+
+[dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_Storage_Xps",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Only for the Vista-style file dialog (IFileDialogCustomize = the Encoding combo).
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
+
+[build-dependencies]
+# Compiles the generated .rc (icon + version info) with the Windows SDK's rc.exe.
+embed-resource = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

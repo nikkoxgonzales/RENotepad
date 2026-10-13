@@ -1,0 +1,39 @@
+# Push a tag that matches Cargo.toml's version (git tag v0.3.0 && git push --tags)
+# and this builds the installer and the portable zip and publishes the release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = $env:GITHUB_REF_NAME.TrimStart('v')
+          @"
+          **Installer** (recommended): ``RENotepad-$v-setup.exe``. Installs for your user account, no admin needed, and adds RENotepad to *Open with* and *Settings › Default apps* for text files.
+
+          **Portable**: ``RENotepad-$v-portable.zip``. Unzip anywhere and run ``RENotepad.exe``.
+
+          The files aren't code-signed yet, so Windows SmartScreen may warn on first run: *More info › Run anyway*. ``SHA256SUMS.txt`` has the checksums.
+          "@ | Set-Content "$env:RUNNER_TEMP/notes.md"
+          $assets = (Get-ChildItem dist -File).FullName
+          if ($assets.Count -ne 3) { throw "expected 3 release files in dist, found $($assets.Count)" }
+          gh release create $env:GITHUB_REF_NAME @assets --title "RENotepad $v" --notes-file "$env:RUNNER_TEMP/notes.md" --generate-notes
