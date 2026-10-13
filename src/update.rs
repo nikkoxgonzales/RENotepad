@@ -199,5 +199,9 @@ mod tests {
         assert!(tag.starts_with('v'), "{tag}");
         assert!(url.starts_with("https://github.com/microsoft/terminal/releases/"), "{url}");
         assert!(latest("nikkoxgonzales/this-repo-does-not-exist").is_err());
+        // Our own releases: the tag must be a version the check can compare.
+        let (tag, url) = latest(REPO).expect("fetch our latest release");
+        assert!(tag.starts_with('v') && tag[1..].split('.').all(|p| p.parse::<u64>().is_ok()), "{tag}");
+        assert_eq!(release_url(Some(url.clone())), url);
     }
 }
