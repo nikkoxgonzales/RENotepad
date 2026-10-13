@@ -8,6 +8,7 @@ mod content_dialog;
 mod dialogs;
 mod encoding;
 mod filedlg;
+mod jumplist;
 mod print;
 mod settings;
 mod status;
@@ -49,6 +50,14 @@ fn main() {
             String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
         };
         let args = text::parse_args(&cmdline);
+        if args.import_pins || args.pin {
+            let result = if args.pin { jumplist::pin_file(args.file.as_deref().unwrap_or("")) } else { jumplist::import_notepad_pins() };
+            let code = result.map_or(jumplist::FAILED, |t| t.code());
+            CoUninitialize();
+            std::process::exit(code as i32);
+        }
+        // Before any window: the taskbar button and jump list belong to this ID.
+        jumplist::set_app_id();
         if app::create(SW_SHOWDEFAULT, &args).is_some() {
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {

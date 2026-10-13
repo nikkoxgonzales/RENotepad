@@ -92,10 +92,11 @@ dependencies = [
 
 [[package]]
 name = "renotepad"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "embed-resource",
  "windows",
+ "windows-core",
  "windows-sys",
 ]
 

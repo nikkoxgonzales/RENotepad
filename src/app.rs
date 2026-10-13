@@ -7,7 +7,7 @@ use crate::dialogs::{self, Template, BUTTON, EDIT, LABEL_OFFSET};
 use crate::encoding::{self, Encoding};
 use crate::settings::Settings;
 use crate::status::{self, Status};
-use crate::{filedlg, muldiv, print, text, theme, update, wide};
+use crate::{filedlg, jumplist, muldiv, print, text, theme, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::DataExchange::IsClipboardFormatAvailable;
@@ -61,6 +61,8 @@ const IDM_DARK: u16 = 44;
 const IDM_ABOUT: u16 = 48;
 const IDM_CHECK_UPDATES: u16 = 49;
 const IDM_AUTO_UPDATES: u16 = 50;
+const IDM_IMPORT_PINS: u16 = 51;
+const IDM_PIN: u16 = 52;
 
 const EDIT_ID: usize = 15;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
@@ -327,6 +329,8 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(file, IDM_SAVE_AS, "Save &as...\tCtrl+Shift+S");
         add(file, IDM_SAVE_ALL, "Save a&ll");
         sep(file);
+        add(file, IDM_PIN, "Pin to &jump list");
+        sep(file);
         add(file, IDM_PAGE_SETUP, "Page set&up...");
         add(file, IDM_PRINT, "&Print...\tCtrl+P");
         sep(file);
@@ -368,6 +372,8 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         sep(settings);
         add(settings, IDM_CHECK_UPDATES, "Check for &updates");
         add(settings, IDM_AUTO_UPDATES, "Check for updates at &startup");
+        sep(settings);
+        add(settings, IDM_IMPORT_PINS, "&Import pinned files from Notepad");
         sep(settings);
         add(settings, IDM_ABOUT, &format!("&About {APP_NAME}"));
         [file, edit, view, settings]
@@ -622,6 +628,40 @@ impl App {
 
     /// A finished update check. The startup check only speaks up, in the status
     /// bar, when there is something new; a check from the menu always answers.
+    fn jumplist_result(&mut self, what: usize, result: Option<jumplist::Tally>) {
+        if what == jumplist::PIN {
+            self.set_message(match result {
+                None => "Couldn't pin it to the jump list",
+                Some(t) if t.missing > 0 => "Save the file first, then pin it",
+                Some(t) if t.already > 0 => "Already pinned to the jump list",
+                Some(_) => "Pinned to the taskbar jump list",
+            });
+            return;
+        }
+        self.set_message("");
+        let files = |n: u32| if n == 1 { "1 file".to_string() } else { format!("{n} files") };
+        let text = match result {
+            None => "Couldn't import Notepad's pinned files.".to_string(),
+            Some(t) => {
+                let mut lines = Vec::new();
+                if t.pinned > 0 {
+                    lines.push(format!("Pinned {} from Notepad. Right-click {APP_NAME} on the taskbar to see them.", files(t.pinned)));
+                }
+                if t.already > 0 {
+                    lines.push(format!("{} already pinned.", files(t.already)));
+                }
+                if t.missing > 0 {
+                    lines.push(format!("Skipped {} that no longer exist where Notepad last saw them (moved, deleted, or on a drive that isn't connected).", files(t.missing)));
+                }
+                if lines.is_empty() {
+                    lines.push("Notepad has no pinned files.".into());
+                }
+                lines.join("\n\n")
+            }
+        };
+        dialogs::message_box(self.hwnd, "Import pinned files from Notepad", &text, &[("OK", IDOK)]);
+    }
+
     fn update_result(&mut self, outcome: update::Outcome, manual: bool) {
         use update::Outcome::*;
         let current = update::current();
@@ -1214,6 +1254,7 @@ impl App {
             en(IDM_FIND_NEXT, has_text);
             en(IDM_FIND_PREV, has_text);
             en(IDM_REPLACE, has_text);
+            en(IDM_PIN, self.doc().path.is_some());
             ck(IDM_WRAP, self.settings.wrap);
             ck(IDM_STATUS_BAR, self.settings.status_bar);
             ck(IDM_DARK, self.settings.dark);
@@ -1298,6 +1339,15 @@ impl App {
                     update::check_async(self.hwnd, true);
                 }
                 IDM_AUTO_UPDATES => self.settings.check_updates = !self.settings.check_updates,
+                IDM_IMPORT_PINS => {
+                    self.set_message("Importing Notepad's pinned files…");
+                    jumplist::run_async(self.hwnd, jumplist::IMPORT, vec!["/ImportNotepadPins".into()]);
+                }
+                IDM_PIN => {
+                    if let Some(path) = self.doc().path.clone() {
+                        jumplist::run_async(self.hwnd, jumplist::PIN, vec!["/PinToJumpList".into(), path]);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1573,6 +1623,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         update::WM_UPDATE_RESULT => {
             let outcome = *Box::from_raw(lparam as *mut update::Outcome);
             a.update_result(outcome, wparam != 0);
+            0
+        }
+        jumplist::WM_JUMPLIST_RESULT => {
+            a.jumplist_result(wparam, jumplist::Tally::from_code(lparam as u32));
             0
         }
         WM_DROPFILES => {

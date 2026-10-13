@@ -1,6 +1,6 @@
 [package]
 name = "renotepad"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Nikko Gonzales"]
 description = "RE:Notepad: Windows 10 Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look. Dark by default, nothing else added."
@@ -44,6 +44,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
 ] }
+# Already pulled in by `windows`; named here because the #[interface] macro
+# (jumplist.rs, the shell's undocumented jump list object) refers to it.
+windows-core = "0.62"
 
 [build-dependencies]
 # Compiles the generated .rc (icon + version info) with the Windows SDK's rc.exe.

@@ -128,7 +128,18 @@ pub struct Args {
     pub force_unicode: bool,
     /// /P: print the file to the default printer and exit.
     pub print: bool,
+    /// /ImportNotepadPins: copy Notepad's jump list pins, no window (RENotepad only).
+    pub import_pins: bool,
+    /// /PinToJumpList file: pin the file to the jump list, no window (RENotepad only).
+    pub pin: bool,
     pub file: Option<String>,
+}
+
+/// The long switch at the start of `rest`, if it's `name` as a whole word:
+/// what follows it.
+fn long_switch<'a>(rest: &'a str, name: &str) -> Option<&'a str> {
+    let (head, tail) = (rest.get(..name.len())?, rest.get(name.len()..)?);
+    (head.eq_ignore_ascii_case(name) && tail.chars().next().is_none_or(|c| c == ' ' || c == '\t')).then_some(tail)
 }
 
 /// Notepad takes the rest of the command line as one filename, quoted or not
@@ -137,6 +148,16 @@ pub fn parse_args(cmdline: &str) -> Args {
     let mut rest = skip_program_name(cmdline).trim_start();
     let mut args = Args::default();
     loop {
+        if let Some(tail) = long_switch(rest, "/ImportNotepadPins") {
+            args.import_pins = true;
+            rest = tail.trim_start();
+            continue;
+        }
+        if let Some(tail) = long_switch(rest, "/PinToJumpList") {
+            args.pin = true;
+            rest = tail.trim_start();
+            continue;
+        }
         let lower = rest.get(..2).map(str::to_ascii_lowercase);
         let switch_end = rest.as_bytes().get(2).is_none_or(|c| *c == b' ' || *c == b'\t');
         match lower.as_deref() {
@@ -230,5 +251,22 @@ mod tests {
         assert!(a.force_ansi && a.print && a.file.as_deref() == Some("f.txt"));
         // a path starting with /a... is not a switch
         assert_eq!(parse_args("np.exe /apple.txt").file.as_deref(), Some("/apple.txt"));
+    }
+
+    #[test]
+    fn import_pins_switch() {
+        let a = parse_args(r#""C:\x\RENotepad.exe" /ImportNotepadPins"#);
+        assert!(a.import_pins && a.file.is_none());
+        assert!(parse_args("np.exe /importnotepadpins").import_pins);
+        // only as a whole word: a file name that starts with it stays a file
+        let a = parse_args("np.exe /ImportNotepadPins.txt");
+        assert!(!a.import_pins && a.file.as_deref() == Some("/ImportNotepadPins.txt"));
+    }
+
+    #[test]
+    fn pin_switch_takes_the_file() {
+        let a = parse_args(r#""C:\x\RENotepad.exe" /PinToJumpList "C:\my notes.txt""#);
+        assert!(a.pin && a.file.as_deref() == Some(r"C:\my notes.txt"));
+        assert!(!parse_args("np.exe /PinToJumpListX.txt").pin);
     }
 }

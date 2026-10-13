@@ -94,6 +94,23 @@ Windows doesn't let any installer make itself the default app; you choose. After
 The installer can also add **Edit with RENotepad** to every file's right-click
 menu. On Windows 11 it's under *Show more options*.
 
+### Bring your pinned files
+
+The files you pinned to Notepad's taskbar jump list (right-click Notepad on the
+taskbar) can come along. The installer offers it the first time you install.
+Afterwards, *Settings › Import pinned files from Notepad* does it any time.
+It reads Windows 11's Notepad, and also Windows 10's classic Notepad, though
+that's untested so far. If Windows refuses, the import says so. Notepad keeps
+its own pins; RENotepad only reads them. Pins to files that no longer exist
+(moved or deleted since you pinned them) are skipped, and the import tells you
+how many.
+
+RENotepad's own jump list works like Notepad's. Files you open show up under
+*Recent*, and you can pin any of them. Recent stays empty while Windows'
+"Show recently opened items in Start, Jump Lists, and File Explorer" setting is
+off; pinned files stay either way. To pin the file you have open, use
+*File › Pin to jump list*: it works whatever that setting is.
+
 ## What it does
 
 It's the classic Notepad, minus the extras.
@@ -168,6 +185,8 @@ ever taking your keyboard or covering your screen. See
 pwsh tests/ui/smoke.ps1     # find/replace/go to, dialogs, layout, tabs, settings
 pwsh tests/ui/menus.ps1     # menu bar keyboard navigation
 pwsh tests/ui/update.ps1    # update check (needs the internet)
+pwsh tests/ui/pins.ps1      # importing Notepad's pins (on made-up jump lists only)
+pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not installed)
 ```
 
 ## Known limits
@@ -183,6 +202,12 @@ pwsh tests/ui/update.ps1    # update check (needs the internet)
   buttons, which are drawn by the app. The keyboard works fully: Tab, arrows,
   Enter, Esc, and Alt+letter.
 - **On Windows 10** the window has no 1-pixel border along its top edge.
+- **Importing Notepad's pins** uses the jump list interface Explorer itself uses,
+  which Microsoft doesn't document. If a Windows update changes it, the import
+  says it couldn't, and the editor is unaffected.
+- **Portable copy:** Windows shows jump list entries only for file types the app
+  is registered for, which the installer does. A portable copy's jump list may
+  stay empty.
 - **Left out on purpose:** the formatting toolbar, Copilot, spell check and
   session restore.
 
@@ -196,6 +221,7 @@ pwsh tests/ui/update.ps1    # update check (needs the internet)
   owner).
 - `src/dialogs.rs`: Find/Replace, the message box, Go to line, About.
 - `src/update.rs`: the update check.
+- `src/jumplist.rs`: the taskbar identity and the pin import from Notepad.
 - `src/encoding.rs`, `src/text.rs`: the pure rules, unit-tested.
 - `src/theme.rs`: dark and light palettes and drawing helpers.
 - `src/print.rs`, `src/filedlg.rs`, `src/settings.rs`.
@@ -223,6 +249,14 @@ pwsh tests/ui/update.ps1    # update check (needs the internet)
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-10-13 — 0.4.0:
+  - Brings over the files pinned to Notepad's taskbar jump list: offered by the
+    installer, and *Settings › Import pinned files from Notepad*. Pins to files
+    that no longer exist are skipped.
+  - *File › Pin to jump list* pins the open file, even with Windows' recent
+    items turned off.
+  - RENotepad has its own taskbar identity, so its jump list stays the same
+    across updates. If you pinned 0.3.0 to the taskbar, unpin it and pin it again.
 - 2026-10-13 — 0.3.0:
   - Checks GitHub for a newer version at startup and shows a notice in the
     status bar; *Settings › Check for updates* does it on demand.

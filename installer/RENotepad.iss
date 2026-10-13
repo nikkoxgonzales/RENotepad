@@ -17,6 +17,8 @@
 #endif
 ; One ProgID for every text type: "Text Document" with the system text icon.
 #define ProgId "RENotepad.txt"
+; Must match APP_ID in src/jumplist.rs: the taskbar button and jump list hang off it.
+#define AppUserModelId "NikkoGonzales.RENotepad"
 #define CapKey "Software\Nikko Gonzales\RENotepad\Capabilities"
 
 [Setup]
@@ -51,6 +53,7 @@ OutputBaseFilename={#AppName}-{#AppVersion}-setup
 
 [Tasks]
 Name: desktopicon; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: importpins; Description: "Bring over the files pinned to Notepad's taskbar jump list"; GroupDescription: "Notepad:"; Check: NotepadPinsNotImported
 Name: editwith; Description: "Add ""Edit with RENotepad"" to the right-click menu of every file"; GroupDescription: "Shell:"; Flags: unchecked
 
 [Files]
@@ -58,8 +61,8 @@ Source: "{#ExePath}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelId}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelId}"; Tasks: desktopicon
 
 ; Per extension: listed under "Open with", a type the app says it handles, and a
 ; choice on the Default apps page.
@@ -75,6 +78,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#AppExe}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExe}"; Flags: uninsdeletekey
 ; The file type RENotepad opens.
 Root: HKA; Subkey: "Software\Classes\{#ProgId}"; ValueType: string; ValueName: ""; ValueData: "Text Document"; Flags: uninsdeletekey
+; Files opened from Explorer join RENotepad's taskbar button and jump list.
+Root: HKA; Subkey: "Software\Classes\{#ProgId}"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "{#AppUserModelId}"
 Root: HKA; Subkey: "Software\Classes\{#ProgId}\DefaultIcon"; ValueType: expandsz; ValueName: ""; ValueData: "%SystemRoot%\System32\imageres.dll,-102"
 Root: HKA; Subkey: "Software\Classes\{#ProgId}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 ; The app itself, for "Open with" > "Choose another app".
@@ -107,12 +112,21 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 Root: HKA; Subkey: "Software\Classes\*\shell\RENotepad"; ValueType: string; ValueName: ""; ValueData: "Edit with {#AppName}"; Flags: uninsdeletekey; Tasks: editwith
 Root: HKA; Subkey: "Software\Classes\*\shell\RENotepad"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: editwith
 Root: HKA; Subkey: "Software\Classes\*\shell\RENotepad\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: editwith
+; Offered once: after that the box is gone, so an upgrade doesn't re-pin what you unpinned.
+Root: HKCU; Subkey: "Software\RENotepad"; ValueType: dword; ValueName: "fNotepadPinsImported"; ValueData: 1; Tasks: importpins
 
 [Run]
+; Notepad's pins go to the user who ran Setup, also when it's elevated for all users.
+Filename: "{app}\{#AppExe}"; Parameters: "/ImportNotepadPins"; StatusMsg: "Bringing over Notepad's pinned files..."; Flags: runhidden waituntilterminated runasoriginaluser; Tasks: importpins
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 Filename: "{code:DefaultAppsUri}"; Description: "Choose {#AppName} as the default app for text files (opens Settings)"; Flags: shellexec nowait postinstall skipifsilent unchecked
 
 [Code]
+function NotepadPinsNotImported: Boolean;
+begin
+  Result := not RegValueExists(HKCU, 'Software\RENotepad', 'fNotepadPinsImported');
+end;
+
 // Windows 11 opens RENotepad's own page; Windows 10 opens the Default apps list.
 function DefaultAppsUri(Param: String): String;
 begin
