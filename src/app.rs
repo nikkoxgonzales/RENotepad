@@ -1809,6 +1809,13 @@ unsafe extern "system" fn find_proc(dlg: HWND, msg: u32, wparam: WPARAM, lparam:
     }
 }
 
+fn open_url(hwnd: HWND, url: &str) {
+    let (verb, target) = (wide("open"), wide(url));
+    unsafe {
+        windows_sys::Win32::UI::Shell::ShellExecuteW(hwnd, verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1817,12 +1824,5 @@ mod tests {
         assert_eq!(super::group(999), "999");
         assert_eq!(super::group(1000), "1,000");
         assert_eq!(super::group(1234567), "1,234,567");
-    }
-}
-
-fn open_url(hwnd: HWND, url: &str) {
-    let (verb, target) = (wide("open"), wide(url));
-    unsafe {
-        windows_sys::Win32::UI::Shell::ShellExecuteW(hwnd, verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
     }
 }
