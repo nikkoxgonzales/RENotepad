@@ -7,7 +7,8 @@ use crate::dialogs::{self, Template, BUTTON, EDIT, LABEL_OFFSET};
 use crate::encoding::{self, Encoding};
 use crate::settings::Settings;
 use crate::status::{self, Status};
-use crate::{filedlg, jumplist, muldiv, print, text, theme, update, wide};
+use crate::theme::{self, Theme};
+use crate::{filedlg, jumplist, muldiv, print, text, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::DataExchange::IsClipboardFormatAvailable;
@@ -57,7 +58,9 @@ const IDM_ZOOM_IN: u16 = 40;
 const IDM_ZOOM_OUT: u16 = 41;
 const IDM_ZOOM_RESET: u16 = 42;
 const IDM_STATUS_BAR: u16 = 43;
-const IDM_DARK: u16 = 44;
+/// Theme commands, one per `Theme::ALL` entry in order (44 Light, 45 Dark, 46 One Dark, 47 Nord).
+const IDM_THEME_FIRST: u16 = 44;
+const IDM_THEME_LAST: u16 = IDM_THEME_FIRST + Theme::ALL.len() as u16 - 1;
 const IDM_ABOUT: u16 = 48;
 const IDM_CHECK_UPDATES: u16 = 49;
 const IDM_AUTO_UPDATES: u16 = 50;
@@ -172,7 +175,7 @@ pub fn try_app() -> Option<&'static mut App> {
 pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
     unsafe {
         let settings = Settings::load();
-        theme::set_app_dark(settings.dark);
+        theme::set_theme(settings.theme);
         let hinst = dialogs::hinstance();
         let class = wide(APP_NAME);
         let wc = WNDCLASSEXW {
@@ -368,7 +371,12 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(view, IDM_WRAP, "&Word wrap");
 
         let settings = CreatePopupMenu();
-        add(settings, IDM_DARK, "&Dark mode");
+        let themes = CreatePopupMenu();
+        for (i, t) in Theme::ALL.iter().enumerate() {
+            add(themes, IDM_THEME_FIRST + i as u16, t.label());
+        }
+        let w = wide("&Theme");
+        AppendMenuW(settings, MF_POPUP, themes as usize, w.as_ptr());
         sep(settings);
         add(settings, IDM_CHECK_UPDATES, "Check for &updates");
         add(settings, IDM_AUTO_UPDATES, "Check for updates at &startup");
@@ -1160,9 +1168,9 @@ impl App {
         }
     }
 
-    fn toggle_dark(&mut self) {
-        self.settings.dark = !self.settings.dark;
-        theme::set_app_dark(self.settings.dark);
+    fn set_theme(&mut self, t: Theme) {
+        self.settings.theme = t;
+        theme::set_theme(t);
         theme::apply_window(self.hwnd);
         for d in &self.docs {
             theme::apply_control(d.edit, "DarkMode_Explorer");
@@ -1257,7 +1265,8 @@ impl App {
             en(IDM_PIN, self.doc().path.is_some());
             ck(IDM_WRAP, self.settings.wrap);
             ck(IDM_STATUS_BAR, self.settings.status_bar);
-            ck(IDM_DARK, self.settings.dark);
+            let picked = IDM_THEME_FIRST + self.settings.theme as u16;
+            CheckMenuRadioItem(menu, IDM_THEME_FIRST as u32, IDM_THEME_LAST as u32, picked as u32, MF_BYCOMMAND);
             ck(IDM_AUTO_UPDATES, self.settings.check_updates);
         }
     }
@@ -1332,7 +1341,7 @@ impl App {
                     self.layout();
                     self.update_status();
                 }
-                IDM_DARK => self.toggle_dark(),
+                IDM_THEME_FIRST..=IDM_THEME_LAST => self.set_theme(Theme::ALL[(id - IDM_THEME_FIRST) as usize]),
                 IDM_ABOUT => dialogs::about(self.hwnd),
                 IDM_CHECK_UPDATES | status::MESSAGE_CLICKED => {
                     self.set_message("Checking for updates…");

@@ -109,6 +109,18 @@ Check 'the owner is dimmed behind it' ([Q]::Top($p.Id, 'RENotepadSmoke', [NullSt
 [Q]::PostMessageW($ask, $WM_COMMAND, [IntPtr]7, [IntPtr]::Zero) | Out-Null; Start-Sleep -Milliseconds 500 # Don't save
 Check "Don't save closes it" ([Q]::CountEdits($main)) 2
 
+# Themes repaint the window at once: sample the tab strip right of the + button.
+function StripColor {
+  $png = Join-Path $env:TEMP 'renotepad-smoke-theme.png'
+  Snap $main $png; Crop-ToFrame $main $png
+  $bmp = [Drawing.Bitmap]::FromFile($png); $c = $bmp.GetPixel((Px 700), (Px 10)); $bmp.Dispose(); Remove-Item $png
+  "$($c.R),$($c.G),$($c.B)"
+}
+Cmd $main 47; Check 'Nord paints the strip' (StripColor) '39,44,54'
+Cmd $main 46; Check 'One Dark paints the strip' (StripColor) '33,37,43'
+Cmd $main 44; Check 'Light paints the strip' (StripColor) '238,238,238'
+Cmd $main 47
+
 # Close everything: the scratch tab asks once, then the window goes and settings are saved.
 [Q]::PostMessageW($main, $WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
 $ask = Wait-Top $p.Id 'RENotepadDialog' 'RENotepad'
@@ -116,6 +128,7 @@ $ask = Wait-Top $p.Id 'RENotepadDialog' 'RENotepad'
 $p.WaitForExit(5000) | Out-Null
 Check 'window closes after the prompt' $p.HasExited $true
 Check 'settings saved on close' (Test-Path $Key) $true
+Check 'theme saved on close' "$((Get-ItemProperty $Key).Theme) $((Get-ItemProperty $Key).fDarkMode)" 'Nord 1'
 
 } finally {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }

@@ -2,6 +2,7 @@
 //! HKCU\Software\Microsoft\Notepad, but in our own key so the real Notepad
 //! is never touched.
 
+use crate::theme::Theme;
 use crate::wide;
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE,
@@ -19,7 +20,7 @@ pub struct Settings {
     pub charset: u8,
     pub wrap: bool,
     pub status_bar: bool,
-    pub dark: bool,
+    pub theme: Theme,
     /// Ask GitHub for a newer release at startup.
     pub check_updates: bool,
     pub match_case: bool,
@@ -43,7 +44,7 @@ impl Default for Settings {
             charset: 1, // DEFAULT_CHARSET
             wrap: false,
             status_bar: true,
-            dark: true,
+            theme: Theme::Dark,
             check_updates: true,
             match_case: false,
             wrap_around: false,
@@ -129,7 +130,12 @@ impl Settings {
         s.charset = k.dword("lfCharSet").map_or(s.charset, |v| v as u8);
         s.wrap = flag("fWrap", s.wrap);
         s.status_bar = flag("StatusBar", s.status_bar);
-        s.dark = flag("fDarkMode", s.dark);
+        // Before themes there was only fDarkMode; it still decides when Theme is missing.
+        s.theme = match k.string("Theme").and_then(|t| Theme::from_name(&t)) {
+            Some(t) => t,
+            None if flag("fDarkMode", true) => Theme::Dark,
+            None => Theme::Light,
+        };
         s.check_updates = flag("fCheckUpdates", s.check_updates);
         s.match_case = flag("fMatchCase", s.match_case);
         s.wrap_around = flag("fWrapAround", s.wrap_around);
@@ -161,7 +167,8 @@ impl Settings {
         k.set_dword("lfCharSet", self.charset as i32);
         k.set_dword("fWrap", self.wrap as i32);
         k.set_dword("StatusBar", self.status_bar as i32);
-        k.set_dword("fDarkMode", self.dark as i32);
+        k.set_string("Theme", self.theme.name());
+        k.set_dword("fDarkMode", self.theme.is_dark() as i32);
         k.set_dword("fCheckUpdates", self.check_updates as i32);
         k.set_dword("fMatchCase", self.match_case as i32);
         k.set_dword("fWrapAround", self.wrap_around as i32);

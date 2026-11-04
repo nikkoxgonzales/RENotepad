@@ -118,7 +118,8 @@ It's the classic Notepad, minus the extras.
 - **Look:**
   - The Windows 11 style: icon and tabs in the title bar, a flat File / Edit /
     View menu bar, a settings gear.
-  - Dark mode by default, light mode one click away.
+  - Dark mode by default. *Settings › Theme* switches to Light, or to the
+    One Dark or Nord color schemes.
   - Text inset 16 px from the edges, and scrollbars only when there's
     something to scroll.
   - Prompts, Go to line and About are Windows 11 style dialogs over the

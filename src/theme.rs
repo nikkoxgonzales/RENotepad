@@ -1,10 +1,10 @@
-//! Dark and light mode for a plain Win32 app. The window chrome (tab strip,
+//! Color themes (light, dark and dark variants) for a plain Win32 app. The window chrome (tab strip,
 //! menu bar, status bar) is painted by hand from `palette()`. The rest is the
 //! usual set of pieces: uxtheme's (undocumented, ordinal-only) app-mode calls
 //! for popup menus and scrollbars, and WM_CTLCOLOR* for the edit and dialogs.
 
 use crate::{muldiv, wide};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
@@ -20,12 +20,79 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     r as u32 | (g as u32) << 8 | (b as u32) << 16
 }
 
-// Dialog colors (dark mode only; light dialogs are stock Windows).
-pub const EDIT_BG: COLORREF = rgb(39, 39, 39);
-pub const EDIT_FG: COLORREF = rgb(230, 230, 230);
-pub const CHROME_BG: COLORREF = rgb(32, 32, 32);
-pub const CHROME_FG: COLORREF = rgb(225, 225, 225);
-pub const CONTROL_BG: COLORREF = rgb(45, 45, 45);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Theme {
+    Light,
+    Dark,
+    OneDark,
+    Nord,
+}
+
+impl Theme {
+    /// Menu order; a theme's menu command is its index here plus the first id.
+    pub const ALL: [Theme; 4] = [Theme::Light, Theme::Dark, Theme::OneDark, Theme::Nord];
+
+    /// The name kept in the registry.
+    pub fn name(self) -> &'static str {
+        match self {
+            Theme::Light => "Light",
+            Theme::Dark => "Dark",
+            Theme::OneDark => "OneDark",
+            Theme::Nord => "Nord",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Theme> {
+        Theme::ALL.into_iter().find(|t| t.name().eq_ignore_ascii_case(name))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Light => "&Light",
+            Theme::Dark => "&Dark",
+            Theme::OneDark => "&One Dark",
+            Theme::Nord => "&Nord",
+        }
+    }
+
+    /// Dark themes get Windows' dark menus, scrollbars and title bar.
+    pub fn is_dark(self) -> bool {
+        self != Theme::Light
+    }
+}
+
+/// Editor and dialog control colors (dark themes only; light dialogs are stock Windows).
+pub struct Controls {
+    pub edit_bg: COLORREF,
+    pub edit_fg: COLORREF,
+    pub chrome_bg: COLORREF,
+    pub chrome_fg: COLORREF,
+    pub control_bg: COLORREF,
+}
+
+const DARK_CONTROLS: Controls = Controls {
+    edit_bg: rgb(39, 39, 39),
+    edit_fg: rgb(230, 230, 230),
+    chrome_bg: rgb(32, 32, 32),
+    chrome_fg: rgb(225, 225, 225),
+    control_bg: rgb(45, 45, 45),
+};
+
+const ONE_DARK_CONTROLS: Controls = Controls {
+    edit_bg: rgb(40, 44, 52),
+    edit_fg: rgb(171, 178, 191),
+    chrome_bg: rgb(33, 37, 43),
+    chrome_fg: rgb(215, 218, 224),
+    control_bg: rgb(44, 49, 58),
+};
+
+const NORD_CONTROLS: Controls = Controls {
+    edit_bg: rgb(46, 52, 64),
+    edit_fg: rgb(216, 222, 233),
+    chrome_bg: rgb(39, 44, 54),
+    chrome_fg: rgb(229, 233, 240),
+    control_bg: rgb(59, 66, 82),
+};
 
 /// Window chrome colors, sampled from Windows 11 Notepad.
 pub struct Palette {
@@ -69,6 +136,42 @@ const DARK_PALETTE: Palette = Palette {
     close_text: rgb(255, 255, 255),
 };
 
+const ONE_DARK_PALETTE: Palette = Palette {
+    strip: rgb(33, 37, 43),
+    surface: rgb(40, 44, 52),
+    line: rgb(24, 26, 31),
+    separator: rgb(62, 68, 81),
+    text: rgb(215, 218, 224),
+    text_secondary: rgb(171, 178, 191),
+    text_inactive: rgb(92, 99, 112),
+    hover: rgb(44, 49, 58),
+    pressed: rgb(50, 56, 66),
+    tab_hover: rgb(36, 40, 47),
+    caption_hover: rgb(44, 49, 58),
+    caption_pressed: rgb(50, 56, 66),
+    close_hover: rgb(224, 108, 117),
+    close_pressed: rgb(190, 80, 70),
+    close_text: rgb(255, 255, 255),
+};
+
+const NORD_PALETTE: Palette = Palette {
+    strip: rgb(39, 44, 54),
+    surface: rgb(46, 52, 64),
+    line: rgb(36, 41, 51),
+    separator: rgb(67, 76, 94),
+    text: rgb(236, 239, 244),
+    text_secondary: rgb(216, 222, 233),
+    text_inactive: rgb(97, 110, 136),
+    hover: rgb(59, 66, 82),
+    pressed: rgb(67, 76, 94),
+    tab_hover: rgb(42, 48, 59),
+    caption_hover: rgb(59, 66, 82),
+    caption_pressed: rgb(67, 76, 94),
+    close_hover: rgb(191, 97, 106),
+    close_pressed: rgb(170, 80, 90),
+    close_text: rgb(255, 255, 255),
+};
+
 const LIGHT_PALETTE: Palette = Palette {
     strip: rgb(238, 238, 238),
     surface: rgb(249, 249, 249),
@@ -87,17 +190,32 @@ const LIGHT_PALETTE: Palette = Palette {
     close_text: rgb(255, 255, 255),
 };
 
-static DARK: AtomicBool = AtomicBool::new(true);
+static CURRENT: AtomicU8 = AtomicU8::new(Theme::Dark as u8);
+
+pub fn current() -> Theme {
+    Theme::ALL[CURRENT.load(Ordering::Relaxed) as usize]
+}
 
 pub fn is_dark() -> bool {
-    DARK.load(Ordering::Relaxed)
+    current().is_dark()
 }
 
 pub fn palette() -> &'static Palette {
-    if is_dark() {
-        &DARK_PALETTE
-    } else {
-        &LIGHT_PALETTE
+    match current() {
+        Theme::Light => &LIGHT_PALETTE,
+        Theme::Dark => &DARK_PALETTE,
+        Theme::OneDark => &ONE_DARK_PALETTE,
+        Theme::Nord => &NORD_PALETTE,
+    }
+}
+
+/// None in light mode, where controls keep their stock colors.
+fn controls() -> Option<&'static Controls> {
+    match current() {
+        Theme::Light => None,
+        Theme::Dark => Some(&DARK_CONTROLS),
+        Theme::OneDark => Some(&ONE_DARK_CONTROLS),
+        Theme::Nord => Some(&NORD_CONTROLS),
     }
 }
 
@@ -107,13 +225,14 @@ struct Brushes {
     control: HBRUSH,
 }
 
-fn brushes() -> &'static Brushes {
-    static B: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let p = *B.get_or_init(|| unsafe {
+/// One set per theme, made the first time that theme is shown and kept for the app's life.
+fn brushes(c: &Controls) -> &'static Brushes {
+    static B: [std::sync::OnceLock<usize>; Theme::ALL.len()] = [const { std::sync::OnceLock::new() }; Theme::ALL.len()];
+    let p = *B[current() as usize].get_or_init(|| unsafe {
         Box::into_raw(Box::new(Brushes {
-            edit: CreateSolidBrush(EDIT_BG),
-            chrome: CreateSolidBrush(CHROME_BG),
-            control: CreateSolidBrush(CONTROL_BG),
+            edit: CreateSolidBrush(c.edit_bg),
+            chrome: CreateSolidBrush(c.chrome_bg),
+            control: CreateSolidBrush(c.control_bg),
         })) as usize
     });
     unsafe { &*(p as *const Brushes) }
@@ -266,8 +385,9 @@ fn uxtheme() -> &'static UxTheme {
 }
 
 /// Process-wide mode: popup menus, context menus and scrollbars follow this.
-pub fn set_app_dark(dark: bool) {
-    DARK.store(dark, Ordering::Relaxed);
+pub fn set_theme(theme: Theme) {
+    CURRENT.store(theme as u8, Ordering::Relaxed);
+    let dark = theme.is_dark();
     let u = uxtheme();
     unsafe {
         if let Some(f) = u.set_app_mode {
@@ -307,30 +427,26 @@ pub fn apply_control(hwnd: HWND, dark_theme: &str) {
 
 /// WM_CTLCOLOREDIT answer for the editor in dark mode; None in light mode (use DefWindowProc).
 pub fn edit_color(hdc: HDC) -> Option<isize> {
-    if !is_dark() {
-        return None;
-    }
+    let c = controls()?;
     unsafe {
-        SetTextColor(hdc, EDIT_FG);
-        SetBkColor(hdc, EDIT_BG);
+        SetTextColor(hdc, c.edit_fg);
+        SetBkColor(hdc, c.edit_bg);
     }
-    Some(brushes().edit as isize)
+    Some(brushes(c).edit as isize)
 }
 
 /// Dialog controls: edits/combos get the control background, everything else chrome.
 pub fn dialog_ctlcolor(msg: u32, hdc: HDC) -> Option<isize> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX};
-    if !is_dark() {
-        return None;
-    }
+    let c = controls()?;
     unsafe {
-        SetTextColor(hdc, CHROME_FG);
+        SetTextColor(hdc, c.chrome_fg);
         if msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX {
-            SetBkColor(hdc, CONTROL_BG);
-            Some(brushes().control as isize)
+            SetBkColor(hdc, c.control_bg);
+            Some(brushes(c).control as isize)
         } else {
-            SetBkColor(hdc, CHROME_BG);
-            Some(brushes().chrome as isize)
+            SetBkColor(hdc, c.chrome_bg);
+            Some(brushes(c).chrome as isize)
         }
     }
 }
