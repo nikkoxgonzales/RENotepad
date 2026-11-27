@@ -70,7 +70,7 @@ fn spec(lang: &str) -> Option<Lang> {
         "rust" | "rs" => Lang { quotes: "\"", keywords: RUST, constants: RUST_CONST, ..base },
         "c" | "h" | "cpp" | "c++" | "cc" | "hpp" | "cxx" | "cs" | "csharp" | "c#" | "java" | "kotlin" | "kt" | "swift" | "go" | "golang" | "js" | "javascript" | "jsx" | "mjs" | "cjs"
         | "ts" | "typescript" | "tsx" | "dart" | "scala" | "groovy" | "php" | "zig" => base,
-        "json" | "jsonc" | "json5" => Lang { line: &["//"], quotes: "\"", keywords: &[], keys: true, ..base },
+        "json" | "jsonc" | "json5" | "jsonl" | "ndjson" => Lang { line: &["//"], quotes: "\"", keywords: &[], keys: true, ..base },
         "python" | "py" | "python3" => Lang { line: &["#"], block: None, quotes: "\"'", keywords: PYTHON, constants: PY_CONST, ..base },
         "ruby" | "rb" => Lang { line: &["#"], block: None, quotes: "\"'", keywords: PYTHON, constants: &["true", "false", "nil"], ..base },
         "sh" | "bash" | "shell" | "zsh" | "console" | "shellsession" | "fish" => {

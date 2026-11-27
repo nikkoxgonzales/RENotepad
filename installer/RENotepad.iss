@@ -102,6 +102,8 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 {#Ext("csv")}
 {#Ext("tsv")}
 {#Ext("json")}
+{#Ext("jsonl")}
+{#Ext("ndjson")}
 {#Ext("xml")}
 {#Ext("yaml")}
 {#Ext("yml")}

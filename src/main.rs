@@ -14,6 +14,7 @@ mod explorer;
 mod filedlg;
 mod frontmatter;
 mod highlight;
+mod json;
 mod jumplist;
 mod lines;
 mod markdown;

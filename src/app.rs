@@ -8,7 +8,7 @@ use crate::encoding::{self, Encoding};
 use crate::explorer::{self, Explorer};
 use crate::settings::{self, Settings};
 use crate::status::{self, Status};
-use crate::{filedlg, jumplist, lines, markdown, muldiv, preview, print, text, theme, undo, update, wide};
+use crate::{filedlg, json, jumplist, lines, markdown, muldiv, preview, print, text, theme, undo, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_IGNORE_MERGE_ERRORS};
@@ -56,6 +56,7 @@ const IDM_SELECT_ALL: u16 = 26;
 const IDM_TIME_DATE: u16 = 27;
 const IDM_REDO: u16 = 28;
 const IDM_DUPLICATE: u16 = 29;
+const IDM_FORMAT_JSON: u16 = 30;
 const IDM_WRAP: u16 = 32;
 const IDM_FONT: u16 = 33;
 const IDM_ZOOM_IN: u16 = 40;
@@ -75,6 +76,7 @@ const IDM_OPEN_FOLDER: u16 = 55;
 const IDM_FOLDER_PANE: u16 = 56;
 /// Ctrl+Shift+E: show the pane, then focus it, then hide it.
 const IDM_FOLDER_PANE_KEY: u16 = 57;
+const IDM_AUTO_FORMAT_JSON: u16 = 58;
 /// File › Recent files: IDM_RECENT + index into settings::recent().
 const IDM_RECENT: u16 = 100;
 
@@ -408,6 +410,7 @@ fn accelerators(global: bool) -> HACCEL {
             (cs, b'Z' as u16, IDM_REDO),
             (c, b'Y' as u16, IDM_REDO),
             (c, b'D' as u16, IDM_DUPLICATE),
+            (FVIRTKEY | FSHIFT | FALT, b'F' as u16, IDM_FORMAT_JSON),
             (FVIRTKEY, VK_F5, IDM_TIME_DATE),
             (c, VK_OEM_PLUS, IDM_ZOOM_IN),
             (c, VK_ADD, IDM_ZOOM_IN),
@@ -471,6 +474,7 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
         add(edit, IDM_SELECT_ALL, "Select &all\tCtrl+A");
         add(edit, IDM_TIME_DATE, "Time/&date\tF5");
         add(edit, IDM_DUPLICATE, "Duplicate l&ine\tCtrl+D");
+        add(edit, IDM_FORMAT_JSON, "Format &JSON\tShift+Alt+F");
         sep(edit);
         add(edit, IDM_FONT, "F&ont...");
 
@@ -492,6 +496,8 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
         sep(settings);
         add(settings, IDM_CHECK_UPDATES, "Check for &updates");
         add(settings, IDM_AUTO_UPDATES, "Check for updates at &startup");
+        sep(settings);
+        add(settings, IDM_AUTO_FORMAT_JSON, "&Format minified JSON files on open");
         sep(settings);
         add(settings, IDM_IMPORT_PINS, "&Import pinned files from Notepad");
         sep(settings);
@@ -1074,6 +1080,30 @@ impl App {
         }
     }
 
+    /// Edit › Format JSON: the whole text, as one undo step. Text that is not
+    /// JSON stays as it is, and the caret goes to where it stops being JSON.
+    fn format_json(&mut self) {
+        let t = &self.doc().shadow;
+        match json::format(t, json::eol_of(t)) {
+            Ok(f) if f == *t => self.set_message("The JSON is already formatted."),
+            Ok(f) => {
+                let ed = lines::Edit { start: 0, end: t.len(), with: f, sel: (0, 0) };
+                self.apply_edit(ed);
+                self.set_message("");
+            }
+            Err(json::Error::TooBig) => self.set_message("The JSON is nested too deep to format."),
+            Err(json::Error::At(at)) => {
+                let (ln, col) = json::line_col(t, at);
+                unsafe {
+                    SendMessageW(self.edit(), EM_SETSEL, at, at as isize);
+                    SendMessageW(self.edit(), EM_SCROLLCARET, 0, 0);
+                }
+                self.set_message(&format!("Not valid JSON at Ln {ln}, Col {col}."));
+                self.update_status();
+            }
+        }
+    }
+
     /// Tab and Shift+Tab, from the editor's WM_CHAR. True: handled, no tab
     /// character. Like VS Code: a selection over lines indents or outdents each
     /// line, Shift+Tab outdents the caret line, and a text indented with spaces
@@ -1610,7 +1640,18 @@ impl App {
             }
         };
         let enc = forced.unwrap_or_else(|| encoding::detect(&bytes));
-        let content = encoding::decode(&bytes, enc);
+        let mut content = encoding::decode(&bytes, enc);
+        // A minified .json opens formatted, not marked as changed: a save
+        // writes it formatted. Text that is not JSON opens as it is.
+        let formatted = self.settings.format_json && json::is_json(path) && json::is_one_line(&content) && {
+            match json::format(&content, &[13, 10]) {
+                Ok(f) if f != content => {
+                    content = f;
+                    true
+                }
+                _ => false,
+            }
+        };
         // A big text needs the vertical bar on any screen. Showing it after the
         // text is in narrows the text, and a wrapped text wraps again (240 ms
         // for 500 KB). A wrong guess costs only that: fit_scrollbars corrects it.
@@ -1653,7 +1694,7 @@ impl App {
         settings::add_recent(path);
         self.update_title();
         self.invalidate_chrome();
-        self.set_message("");
+        self.set_message(if formatted { "Formatted the minified JSON. Save keeps the new layout." } else { "" });
         self.update_status();
         self.fit_scrollbars();
         true
@@ -2091,6 +2132,7 @@ impl App {
             en(IDM_UNDO, editing && self.doc().hist.can_undo());
             en(IDM_REDO, editing && self.doc().hist.can_redo());
             en(IDM_DUPLICATE, editing);
+            en(IDM_FORMAT_JSON, has_text);
             en(IDM_CUT, editing && has_sel);
             en(IDM_COPY, has_sel);
             en(IDM_DELETE, editing && has_sel);
@@ -2107,6 +2149,7 @@ impl App {
             ck(IDM_STATUS_BAR, self.settings.status_bar);
             ck(IDM_DARK, self.settings.dark);
             ck(IDM_AUTO_UPDATES, self.settings.check_updates);
+            ck(IDM_AUTO_FORMAT_JSON, self.settings.format_json);
             ck(IDM_FOLDER_PANE, self.pane_on());
         }
     }
@@ -2125,7 +2168,7 @@ impl App {
                     }
                     return;
                 }
-                IDM_REDO | IDM_DUPLICATE => return,
+                IDM_REDO | IDM_DUPLICATE | IDM_FORMAT_JSON => return,
                 IDM_SELECT_ALL => {
                     let f = unsafe { GetFocus() };
                     if f != self.explorer.hwnd {
@@ -2139,7 +2182,7 @@ impl App {
         if (explorer::CMD_FIRST..=explorer::CMD_LAST).contains(&id) {
             return self.tree_command(id);
         }
-        const EDITING_ONLY: [u16; 12] = [IDM_UNDO, IDM_REDO, IDM_DUPLICATE, IDM_CUT, IDM_PASTE, IDM_DELETE, IDM_FIND, IDM_FIND_NEXT, IDM_FIND_PREV, IDM_REPLACE, IDM_GOTO, IDM_TIME_DATE];
+        const EDITING_ONLY: [u16; 13] = [IDM_UNDO, IDM_REDO, IDM_DUPLICATE, IDM_FORMAT_JSON, IDM_CUT, IDM_PASTE, IDM_DELETE, IDM_FIND, IDM_FIND_NEXT, IDM_FIND_PREV, IDM_REPLACE, IDM_GOTO, IDM_TIME_DATE];
         if !self.preview().is_null() && EDITING_ONLY.contains(&id) {
             return; // an accelerator: the menu items are greyed out
         }
@@ -2182,6 +2225,7 @@ impl App {
                     let ed = lines::duplicate(t, s.min(t.len()), end.min(t.len()));
                     self.apply_edit(ed);
                 }
+                IDM_FORMAT_JSON => self.format_json(),
                 IDM_CUT => {
                     SendMessageW(e, WM_CUT, 0, 0);
                 }
@@ -2224,6 +2268,7 @@ impl App {
                     update::check_async(self.hwnd, true);
                 }
                 IDM_AUTO_UPDATES => self.settings.check_updates = !self.settings.check_updates,
+                IDM_AUTO_FORMAT_JSON => self.settings.format_json = !self.settings.format_json,
                 IDM_IMPORT_PINS => {
                     self.set_message("Importing Notepad's pinned files…");
                     jumplist::run_async(self.hwnd, jumplist::IMPORT, vec!["/ImportNotepadPins".into()]);

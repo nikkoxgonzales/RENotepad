@@ -52,10 +52,14 @@ It's the classic Notepad, minus the extras.
   Encoding picker), Save all, Page setup, Print, Close tab, Close window.
 - **Edit:** Undo and Redo (many steps, Ctrl+Z / Ctrl+Y), Cut, Copy, Paste,
   Delete, Find, Find next/previous, Replace, Go to, Select all, Time/Date,
-  Duplicate line (Ctrl+D), Font.
+  Duplicate line (Ctrl+D), Format JSON (Shift+Alt+F), Font.
 - **Editing like a code editor:** Tab and Shift+Tab indent and outdent the
   selected lines; in a file indented with spaces, Tab types spaces. The bracket
   at the caret and its partner get a box: `()`, `[]`, `{}`.
+- **JSON:** a minified `.json` file opens formatted, with a two-space indent.
+  The tab is not marked as changed, and a save writes the formatted text.
+  Turn it off with *gear › Format minified JSON files on open*. `.jsonl` files
+  open as they are, one record on each line.
 - **View:** Zoom, Status bar, Word wrap, Folder pane, Markdown preview.
 - **Status bar:** line and column, the character count ("5 of 120
   characters" while text is selected), then zoom, line endings and encoding.
@@ -196,7 +200,7 @@ Windows doesn't let any installer make itself the default app; you choose. After
 
 - **For all text files at once:** open *Settings › Apps › Default apps*,
   search for **RENotepad**, and pick it for the file types you want
-  (`.txt`, `.log`, `.ini`, `.md`, `.json`, `.csv`…). The installer's last page
+  (`.txt`, `.log`, `.ini`, `.md`, `.json`, `.jsonl`, `.csv`…). The installer's last page
   has a checkbox that opens this page for you.
 - **For one file type:** right-click a file, then *Open with › Choose another
   app*. Pick **RENotepad** and tick *Always*.

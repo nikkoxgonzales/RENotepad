@@ -18,7 +18,7 @@ $app = Join-Path $env:LOCALAPPDATA 'Programs\RENotepad'
 if (Test-Path $app) { Write-Host "RENotepad is installed for this user ($app); not touching it."; exit 2 }
 if (-not $Setup -or -not (Test-Path $Setup)) { Write-Host 'No setup found: run scripts/package.ps1 first.'; exit 2 }
 
-$exts = 'txt', 'log', 'ini', 'cfg', 'conf', 'md', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'toml', 'nfo', 'srt'
+$exts = 'txt', 'log', 'ini', 'cfg', 'conf', 'md', 'csv', 'tsv', 'json', 'jsonl', 'ndjson', 'xml', 'yaml', 'yml', 'toml', 'nfo', 'srt'
 function ExtState { foreach ($e in $exts) { reg query "HKCU\Software\Classes\.$e" /s 2>&1 | Out-String } }
 $extBefore = ExtState
 $marker = (Get-ItemProperty HKCU:\Software\RENotepad -ErrorAction SilentlyContinue).fNotepadPinsImported
