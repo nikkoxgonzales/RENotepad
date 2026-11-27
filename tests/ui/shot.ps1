@@ -6,10 +6,12 @@
 # The picture is cropped to the visible window.
 # -Preview shows the Markdown preview of -File (a .md file).
 # -Pane shows the folder pane on the folder of -File, with its folders expanded.
-# Usage: pwsh tests/ui/shot.ps1 -Out shot.png [-Exe ...] [-Light] [-Tabs 3] [-Lines 60] [-Dialog save] [-File notes.txt [-Preview] [-Pane]]
+# -Height sets the window height (the README Markdown pair uses 860, so the whole preview shows).
+# Usage: pwsh tests/ui/shot.ps1 -Out shot.png [-Exe ...] [-Height 860] [-Light] [-Tabs 3] [-Lines 60] [-Dialog save] [-File notes.txt [-Preview] [-Pane]]
 param(
   [Parameter(Mandatory)][string]$Out,
   [string]$Exe = (Join-Path $PSScriptRoot '..\..\target\debug\RENotepad.exe'),
+  [int]$Height = 607,
   [switch]$Light,
   [int]$Tabs = 2,
   [int]$Lines = 1,
@@ -27,11 +29,11 @@ if ($Light) { Cmd $main 44 }
 if ($File) {
   for ($i = 1; $i -lt $Tabs; $i++) { Cmd $main 1; Type-Text ([Q]::VisibleEdit($main)) 'This is RE:Notepad' }
   if ($Tabs -gt 1 -and $Dialog -ne 'save') { Cmd $main 12 } # Ctrl+Tab wraps back to the file (the save prompt needs the modified tab)
-  Show-Ghost $main
+  Show-Ghost $main 952 $Height
 } else {
   if ($Tabs -gt 1) { Type-Text ([Q]::VisibleEdit($main)) 'This is RE:Notepad' } # a modified tab behind
   for ($i = 1; $i -lt $Tabs; $i++) { Cmd $main 1 }
-  Show-Ghost $main
+  Show-Ghost $main 952 $Height
   # The active tab gets $Lines lines (enough of them brings up the scrollbar).
   $text = (1..$Lines | ForEach-Object { if ($_ -eq 1) { 'This is RE:Notepad' } else { "line $_" } }) -join "`r`n"
   Type-Text ([Q]::VisibleEdit($main)) $text
@@ -79,4 +81,5 @@ if (-not $Dialog) {
 }
 Crop-ToFrame $main $Out
 Stop-Process -Id $p.Id -Force
+Start-Sleep -Milliseconds 300; Remove-Item $TestKey -Recurse -ErrorAction SilentlyContinue # the run adds -File to the recent files
 "wrote $Out"

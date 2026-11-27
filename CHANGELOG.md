@@ -2,7 +2,7 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
-- Unreleased:
+- 2026-11-28 — 0.7.0:
   - The Markdown preview looks like GitHub's rendering: GitHub's colors, sizes
     and spacing, underlined h1 and h2, quote bars, code blocks with syntax
     colors, bordered tables, and nested lists numbered 1, i, a.
