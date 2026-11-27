@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "renotepad"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "embed-resource",
  "pulldown-cmark",

@@ -2,6 +2,13 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-28 — 0.9.0:
+  - A minified `.json` file opens formatted, with a two-space indent. The tab
+    is not marked as changed. A save writes the formatted text. Turn it off in
+    the gear menu: *Format minified JSON files on open*.
+  - Edit › Format JSON (Shift+Alt+F) formats any JSON text as one undo step.
+    In text that is not JSON, the caret goes to the error.
+  - The installer lists RE:Notepad for `.jsonl` and `.ndjson` files too.
 - 2026-11-28 — 0.8.0:
   - Undo and redo now have many levels (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z).
     Undo back to the last save clears the unsaved dot.
