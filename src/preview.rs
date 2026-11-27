@@ -17,6 +17,9 @@ const EM_SETEVENTMASK: u32 = WM_USER + 69;
 const EM_SETTEXTEX: u32 = WM_USER + 97;
 const EM_GETSCROLLPOS: u32 = WM_USER + 221;
 const EM_SETSCROLLPOS: u32 = WM_USER + 222;
+const EM_SETEDITSTYLE: u32 = WM_USER + 204;
+/// Without it, table cell edges that have no border show as gray gridlines.
+const SES_HIDEGRIDLINES: usize = 0x0002_0000;
 const ENM_LINK: isize = 0x0400_0000;
 const EN_LINK: u32 = 0x070B;
 
@@ -61,6 +64,7 @@ pub fn create(parent: HWND, id: usize) -> HWND {
         let style = WS_CHILD | WS_CLIPSIBLINGS | WS_VSCROLL | ES_MULTILINE as u32 | ES_READONLY as u32;
         let h = CreateWindowExW(0, class.as_ptr(), std::ptr::null(), style, 0, 0, 0, 0, parent, id as HMENU, dialogs::hinstance(), std::ptr::null());
         SendMessageW(h, EM_SETEVENTMASK, 0, ENM_LINK);
+        SendMessageW(h, EM_SETEDITSTYLE, SES_HIDEGRIDLINES, SES_HIDEGRIDLINES as isize);
         h
     }
 }

@@ -124,6 +124,8 @@ struct Writer {
     pending: Option<String>,
     /// A paragraph has been started (its properties are written).
     open: bool,
+    /// Where the open paragraph starts in `out`.
+    para_at: usize,
     /// List marker waiting for the item's first text.
     marker: Option<String>,
     /// Inside a code block or raw HTML block: its text, written at the end.
@@ -160,6 +162,7 @@ impl Writer {
 
     fn flush(&mut self) {
         if let Some(p) = self.pending.take() {
+            self.para_at = self.out.len();
             self.out.push_str(&p);
             self.open = true;
         }
@@ -175,6 +178,17 @@ impl Writer {
         if self.open {
             self.out.push_str("\\par\n");
             self.open = false;
+            // RichEdit stretches a highlight on the last line down through the
+            // space after the paragraph. Move that space to a 1-point paragraph.
+            let gap = format!("\\sa{GAP}\\");
+            let para = &self.out[self.para_at..];
+            if para.contains("\\highlight") {
+                if let Some(i) = para.find(&gap) {
+                    let i = self.para_at + i;
+                    self.out.replace_range(i..i + gap.len() - 1, "\\sa0");
+                    self.out.push_str(&format!("\\pard\\plain\\fs2\\sa{}\\par\n", GAP - 20));
+                }
+            }
         }
     }
 
@@ -534,6 +548,16 @@ mod tests {
     fn code_blocks_keep_their_lines_and_drop_the_last_newline() {
         let r = rtf("```\nfn main() {\n    x\n}\n```");
         assert!(r.contains("\\f1\\fs19\\cf1\\highlight4 fn main() \\{\\line     x\\line \\}\\par"));
+    }
+
+    #[test]
+    fn a_highlighted_paragraph_moves_its_space_after_to_a_spacer() {
+        for md in ["```\nx\n```", "a `b`"] {
+            let r = rtf(md);
+            assert!(r.contains("\\pard\\sa0\\li"), "{md}");
+            assert!(r.contains("\\par\n\\pard\\plain\\fs2\\sa140\\par"), "{md}");
+        }
+        assert!(!rtf("plain").contains("\\sa0"));
     }
 
     #[test]
