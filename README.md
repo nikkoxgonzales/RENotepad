@@ -237,6 +237,28 @@ network request is the update check:
 
 RENotepad never downloads or installs anything by itself.
 
+## Performance
+
+Measured with `tests/perf/journeys.ps1` on a Windows 11 test PC, release
+build, median of 5 runs. The window starts hidden, so the times leave out the
+first paint on screen.
+
+| What you do | 0.7.1 | 0.7.2 | Faster |
+|---|---|---|---|
+| Start with no file, until you can type | 44.1 ms | 39.6 ms | 1.11x |
+| Start with a 5 MB text file | 107.4 ms | 71.9 ms | 1.49x |
+| Preview a Markdown file with a 3 MB picture | 76.9 ms | 29.4 ms | 2.6x |
+| Preview a 200 KB README | 174.0 ms | 176.6 ms | same |
+| Type one character in a 5 MB file | 1.72 ms | 1.78 ms | same |
+| Switch tabs | 3.35 ms | 3.38 ms | same |
+
+What changed in 0.7.2: the call that adds a file to Windows' recent list
+(about 26 ms) moved off the window's thread, the folder pane loads its icons
+only when you open a folder, pictures convert for the preview without one
+memory allocation per byte, and UTF-8 files decode with Windows' own converter.
+The large README is limited by Windows' RichEdit control, which reads the
+preview's 2.3 MB of formatted text.
+
 ## Known limits
 
 - **Find and Replace** open as a small dialog, the Windows 10 way, rather than
@@ -296,7 +318,13 @@ pwsh tests/ui/update.ps1     # update check (needs the internet)
 pwsh tests/ui/pins.ps1       # importing Notepad's pins (on made-up jump lists only)
 pwsh tests/ui/installer.ps1  # install, reinstall, uninstall (only if not installed)
 pwsh tests/ui/shot.ps1 -Out shot.png  # a screenshot, without taking focus
+pwsh tests/perf/journeys.ps1 # start, open, type, tab and preview times (ms)
 ```
+
+The lab report times each hot path and counts its allocations:
+`cargo test --release perf_report -- --ignored --nocapture --test-threads=1`.
+The allocation ratchets beside it run in every `cargo test` and fail if a
+count goes up.
 
 ### Project layout
 

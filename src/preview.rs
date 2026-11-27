@@ -199,6 +199,8 @@ pub fn render(h: HWND, md: &str, dir: Option<&Path>, toggled: &[u32]) {
     let rtf = markdown::to_rtf(md, &c, &opts);
     unsafe {
         SetWindowLongPtrW(h, GWLP_USERDATA, width as isize);
+        // Redraw off before the color, as load_rtf turns it on only after the new text.
+        SendMessageW(h, WM_SETREDRAW, 0, 0);
         SendMessageW(h, EM_SETBKGNDCOLOR, 0, bg as isize);
     }
     load_rtf(h, rtf);

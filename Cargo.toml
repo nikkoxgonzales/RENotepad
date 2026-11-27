@@ -1,6 +1,6 @@
 [package]
 name = "renotepad"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 authors = ["Nikko Gonzales"]
 description = "RE:Notepad: Windows 10 Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look and a Markdown preview. Dark by default, nothing else added."

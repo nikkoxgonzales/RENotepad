@@ -1275,6 +1275,7 @@ impl App {
         if let Some(i) = self.docs.iter().position(same) {
             // Opened again, so it moves to the top of the recent files like a first open.
             settings::add_recent(path);
+            add_to_shell_recent(path);
             self.switch_to(i);
             if forced.is_some() && !self.modified() {
                 self.load(path, forced);
@@ -1957,17 +1958,15 @@ pub fn group(n: usize) -> String {
     out
 }
 
-/// Save without ever leaving a half-written file: write the new bytes beside the
-/// old file, flush them to disk, then swap them in. ReplaceFileW keeps the old
-/// file's attributes, ACL and creation time. Falls back to writing in place, like
-/// Notepad, when the folder won't take the temp file or the swap fails (some
-/// network shares). Ceiling: the swap turns a hard-linked file into a separate copy.
+/// Calls that add_to_shell_recent sent and the worker did not finish.
+static SHELL_RECENT_PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Tell the shell about an opened file (Recent items, the jump list's Recent
 /// category). The call takes about 26 ms at the first open of a run, so one
-/// worker thread makes the calls, in the order of the opens.
-/// Ceiling: a process that ends at once (/P prints and exits) can end before
-/// the worker, and then the shell does not get that file.
+/// worker thread makes the calls, in the order of the opens. main waits for
+/// them before the process ends (wait_shell_recent).
 fn add_to_shell_recent(path: &str) {
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc::{channel, Sender};
     static WORKER: std::sync::OnceLock<Sender<Vec<u16>>> = std::sync::OnceLock::new();
     let tx = WORKER.get_or_init(|| {
@@ -1976,13 +1975,32 @@ fn add_to_shell_recent(path: &str) {
             CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
             for p in rx {
                 SHAddToRecentDocs(SHARD_PATHW as u32, p.as_ptr().cast());
+                SHELL_RECENT_PENDING.fetch_sub(1, Ordering::Release);
             }
         });
         tx
     });
-    let _ = tx.send(wide(path));
+    SHELL_RECENT_PENDING.fetch_add(1, Ordering::Acquire);
+    if tx.send(wide(path)).is_err() {
+        SHELL_RECENT_PENDING.fetch_sub(1, Ordering::Release);
+    }
 }
 
+/// Before the process ends: let the worker finish its shell calls, so a file
+/// opened just before the close (or by /P, which prints and exits) still reaches
+/// the shell. Ceiling: gives up after 1 s, so a hung shell cannot hold the exit.
+pub fn wait_shell_recent() {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while SHELL_RECENT_PENDING.load(std::sync::atomic::Ordering::Acquire) > 0 && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Save without ever leaving a half-written file: write the new bytes beside the
+/// old file, flush them to disk, then swap them in. ReplaceFileW keeps the old
+/// file's attributes, ACL and creation time. Falls back to writing in place, like
+/// Notepad, when the folder won't take the temp file or the swap fails (some
+/// network shares). Ceiling: the swap turns a hard-linked file into a separate copy.
 fn write_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     if !std::path::Path::new(path).exists() {

@@ -2,6 +2,14 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-28 — 0.7.2:
+  - Faster: a 5 MB file opens about 1.5x faster, the app starts about 10%
+    faster, and a Markdown preview with a large picture shows about 2.6x faster.
+    The README's Performance section has the numbers.
+  - A file opened just before you close the app, or printed with `/P`, now
+    still reaches Windows' recent list and the taskbar jump list.
+  - Opening a file that is already open moves it to the top of Windows' recent
+    list and the jump list too, not only of File › Recent files.
 - 2026-11-28 — 0.7.1:
   - Markdown preview: a word with an accent or a non-Latin letter before a dot
     (`Café.`) closed the app. It now shows.

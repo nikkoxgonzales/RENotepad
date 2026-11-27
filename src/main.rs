@@ -94,6 +94,7 @@ fn main() {
                 DispatchMessageW(&msg);
             }
         }
+        app::wait_shell_recent();
         CoUninitialize();
     }
 }
