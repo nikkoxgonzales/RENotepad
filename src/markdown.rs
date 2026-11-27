@@ -54,8 +54,9 @@ pub struct Picture {
 pub struct Options<'a> {
     /// The width of the text area in twips.
     pub width: i32,
-    /// The `<details>` blocks that the user opened, by their number in the document.
-    pub open_details: &'a [u32],
+    /// The `<details>` blocks that the user toggled, by their number in the document:
+    /// a closed block shows open, a `<details open>` block shows closed.
+    pub toggled_details: &'a [u32],
     /// The picture at an image's URL, or None for a placeholder.
     pub picture: &'a dyn Fn(&str) -> Option<Picture>,
     /// The width of a code character (10pt Consolas) in twips, as the control draws it.
@@ -550,17 +551,23 @@ impl<'a> Writer<'a> {
         let max = ((self.width() - self.indent()) / PX).max(16);
         match (self.opts.picture)(url) {
             Some(p) => {
-                let (nw, nh) = (p.width.max(1) as i32, p.height.max(1) as i32);
+                // The sizes come from the file and the HTML: i64, then clamped, cannot overflow.
+                const BIG: i64 = 1 << 20;
+                let (nw, nh) = (i64::from(p.width).clamp(1, BIG), i64::from(p.height).clamp(1, BIG));
+                let (w, h) = (w.map(|v| i64::from(v).min(BIG)), h.map(|v| i64::from(v).min(BIG)));
                 let (mut pw, mut ph) = match (w, h) {
                     (Some(w), Some(h)) => (w, h),
                     (Some(w), None) => (w, nh * w / nw),
                     (None, Some(h)) => (nw * h / nh, h),
                     _ => (nw, nh),
                 };
+                let max = i64::from(max);
                 if pw > max {
                     ph = ph * max / pw;
                     pw = max;
                 }
+                // At most `max` wide and one picture height of 2^20 px: the twips fit an i32.
+                let (pw, ph) = (pw.max(1) as i32, ph.clamp(1, BIG) as i32);
                 let blip = if p.png { "\\pngblip" } else { "\\jpegblip" };
                 self.out.push_str(&format!("{{\\pict{blip}\\picw{nw}\\pich{nh}\\picwgoal{}\\pichgoal{} ", pw * PX, ph.max(1) * PX));
                 self.out.push_str(&p.hex);
@@ -802,7 +809,7 @@ impl<'a> Writer<'a> {
         let marker = match &mut list.next {
             Some(n) => {
                 let v = *n;
-                *n += 1;
+                *n = n.saturating_add(1);
                 // ol, ol ol, ol ol ol: decimal, lower-roman, lower-alpha.
                 match depth {
                     1 => format!("{v}."),
@@ -1171,7 +1178,7 @@ impl<'a> Writer<'a> {
                 };
                 self.cell_start(name == "th", a);
             }
-            "details" if !in_cell => self.details_open(),
+            "details" if !in_cell => self.details_open(t.attr("open").is_some()),
             "summary" if !in_cell => self.summary_open(),
             "dt" if !in_cell => {
                 self.para();
@@ -1216,8 +1223,9 @@ impl<'a> Writer<'a> {
             "table" => self.table_end(),
             "td" | "th" => self.cell_end(),
             "thead" => self.html_head = false,
-            "details" => self.details_close(),
-            "summary" => self.summary_close(),
+            // Gated as in html_open: a cell's `</details>` must not close a block outside the table.
+            "details" if !in_cell => self.details_close(),
+            "summary" if !in_cell => self.summary_close(),
             "q" => self.text("\u{201D}"),
             "dt" => {
                 self.html_inline_close("dt");
@@ -1243,11 +1251,12 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn details_open(&mut self) {
+    /// `open`: the tag has the `open` attribute, which GitHub keeps.
+    fn details_open(&mut self, open: bool) {
         self.end();
         let id = self.details_next;
         self.details_next += 1;
-        let open = self.opts.open_details.contains(&id);
+        let open = open != self.opts.toggled_details.contains(&id);
         self.details.push(Details { id, open, hide: None });
     }
 
@@ -1484,7 +1493,7 @@ fn autolinks(t: &str) -> Vec<Seg<'_>> {
         let boundary = i == 0 || matches!(b[i - 1], b' ' | b'\t' | b'\n' | b'*' | b'_' | b'~' | b'(');
         if boundary {
             let rest = &t[i..];
-            let prefix = ["https://", "http://", "www."].into_iter().find(|p| rest.len() > p.len() && rest[..p.len()].eq_ignore_ascii_case(p));
+            let prefix = ["https://", "http://", "www."].into_iter().find(|p| rest.len() > p.len() && rest.get(..p.len()).is_some_and(|r| r.eq_ignore_ascii_case(p)));
             if let Some(p) = prefix {
                 let end = rest.find(|c: char| c.is_whitespace() || c == '<').unwrap_or(rest.len());
                 let cand = trim_url(&rest[..end]);
@@ -1605,7 +1614,11 @@ fn emoji(t: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// CSS lower-roman: 1 to 3999, else decimal (a huge `<ol start>` must not build a huge string).
 fn roman(mut n: u64) -> String {
+    if n == 0 || n > 3999 {
+        return n.to_string();
+    }
     let mut s = String::new();
     for (v, r) in [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")] {
         while n >= v {
@@ -1616,7 +1629,11 @@ fn roman(mut n: u64) -> String {
     s
 }
 
+/// CSS lower-alpha: 1 is a, 27 is aa; 0 is decimal.
 fn alpha(mut n: u64) -> String {
+    if n == 0 {
+        return "0".into();
+    }
     let mut s = Vec::new();
     while n > 0 {
         n -= 1;
@@ -1682,8 +1699,11 @@ pub fn to_rtf(md: &str, c: &Colors, opts: &Options) -> String {
         }
     }
     w.html_flush();
+    // Close what the document left open. A `<pre>` with no `</pre>` takes the rest of the file.
+    if w.html_pre {
+        w.html_close("pre");
+    }
     w.end();
-    // Close what the document left open.
     while w.details.last().is_some() {
         w.details_close();
     }
@@ -1766,7 +1786,7 @@ mod tests {
     }
 
     fn rtf(md: &str) -> String {
-        to_rtf(md, &C, &Options { width: 9000, open_details: &[], picture: &no_picture, code_char: 110.0 })
+        to_rtf(md, &C, &Options { width: 9000, toggled_details: &[], picture: &no_picture, code_char: 110.0 })
     }
 
     #[test]
@@ -1889,9 +1909,41 @@ mod tests {
         assert!(r.contains("More"), "{r}");
         assert!(!r.contains("Hidden"), "{r}");
         assert!(r.contains("After"), "{r}");
-        let open = to_rtf(md, &C, &Options { width: 9000, open_details: &[0], picture: &no_picture, code_char: 110.0 });
+        let open = to_rtf(md, &C, &Options { width: 9000, toggled_details: &[0], picture: &no_picture, code_char: 110.0 });
         assert!(open.contains("Hidden text"), "{open}");
         assert_eq!(resolve("details:0", None), Target::Details(0));
+    }
+
+    #[test]
+    fn details_in_a_table_cell_do_not_close_the_block_around_the_table() {
+        let md = "<details>
+<summary>More</summary>
+
+| a |
+|---|
+| <details><summary>x</summary>y</details> |
+
+Hidden after
+
+</details>
+
+After";
+        let r = rtf(md);
+        assert!(!r.contains("Hidden"), "{r}");
+        assert!(r.contains("After"), "{r}");
+    }
+
+    #[test]
+    fn details_with_the_open_attribute_start_open_and_toggle_closed() {
+        let md = "<details open>
+<summary>More</summary>
+
+Shown text
+
+</details>";
+        assert!(rtf(md).contains("Shown text"));
+        let toggled = to_rtf(md, &C, &Options { width: 9000, toggled_details: &[0], picture: &no_picture, code_char: 110.0 });
+        assert!(!toggled.contains("Shown"), "{toggled}");
     }
 
     #[test]
@@ -1903,7 +1955,7 @@ mod tests {
     #[test]
     fn a_loaded_picture_is_scaled_to_fit() {
         let pic = |_: &str| Some(Picture { png: true, width: 2000, height: 1000, hex: "00".into() });
-        let r = to_rtf("![x](a.png)", &C, &Options { width: 9000, open_details: &[], picture: &pic, code_char: 110.0 });
+        let r = to_rtf("![x](a.png)", &C, &Options { width: 9000, toggled_details: &[], picture: &pic, code_char: 110.0 });
         assert!(r.contains("{\\pict\\pngblip\\picw2000\\pich1000\\picwgoal9000\\pichgoal4500 00}"), "{r}");
     }
 
@@ -2028,6 +2080,33 @@ mod tests {
     }
 
     #[test]
+    fn a_non_ascii_word_before_a_dot_does_not_panic() {
+        assert!(rtf("Caf\u{e9}. x").contains("Caf\\u233?. x"));
+        assert!(rtf("\u{4e2d}\u{6587}. www.example.com").contains("HYPERLINK \"http://www.example.com\""));
+    }
+
+    #[test]
+    fn nested_ordered_lists_that_start_at_0_or_past_3999_use_numbers() {
+        let r0 = rtf("1. a\n\n   0. b");
+        assert!(r0.contains("\\tab 0.\\tab "), "{r0}");
+        let r = rtf("<ol><li>a<ol start=\"18446744073709551615\"><li>b</li><li>c</li></ol></li></ol>");
+        assert!(r.contains("\\tab 18446744073709551615.\\tab "), "{r}");
+    }
+
+    #[test]
+    fn a_pre_with_no_end_tag_shows_the_rest_of_the_file() {
+        assert!(rtf("<pre>\nline one\n\nline two").contains("line two"));
+    }
+
+    #[test]
+    fn huge_picture_sizes_do_not_overflow() {
+        let pic = |_: &str| Some(Picture { png: true, width: u32::MAX, height: u32::MAX, hex: "00".into() });
+        let opts = Options { width: 9000, toggled_details: &[], picture: &pic, code_char: 110.0 };
+        let r = to_rtf("<img src=a.png height=2147483647>", &C, &opts);
+        assert!(r.contains("\\picwgoal9000"), "{r}");
+    }
+
+    #[test]
     fn dashes_that_are_not_front_matter_stay_rules() {
         for md in ["text\n\n---\nnot: meta\n---\n", "---\ntitle: open", "---\n\ntitle: x\n---\n"] {
             assert!(rtf(md).contains("\\brdrw60\\brdrcf6"), "{md}");
@@ -2095,7 +2174,7 @@ mod dump {
         let Ok(p) = std::env::var("RTF_DUMP") else { return };
         let md = std::fs::read_to_string(&p).unwrap();
         let none = |_: &str| None;
-        let r = super::to_rtf(&md, &super::tests::C, &super::Options { width: 9000, open_details: &[], picture: &none, code_char: 110.0 });
+        let r = super::to_rtf(&md, &super::tests::C, &super::Options { width: 9000, toggled_details: &[], picture: &none, code_char: 110.0 });
         std::fs::write(format!("{p}.rtf"), r).unwrap();
     }
 }

@@ -151,7 +151,8 @@ pub fn decode_entities(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        let semi = rest[1..].find(';').map(|n| n + 1).filter(|&n| n <= 10);
+        // Only the next 10 bytes: a search to the end for each `&` is quadratic.
+        let semi = rest.as_bytes()[1..].iter().take(10).position(|&c| c == b';').map(|n| n + 1);
         let decoded = semi.and_then(|n| {
             let ent = &rest[1..n];
             let ch = if let Some(num) = ent.strip_prefix('#') {
@@ -249,6 +250,12 @@ mod tests {
     fn a_quoted_greater_than_sign_does_not_end_the_tag() {
         let (t, _) = tokens(r#"<a href="x>y">z</a>"#);
         assert_eq!(t[0].attr("href"), Some("x>y"));
+    }
+
+    #[test]
+    fn many_ampersands_with_no_semicolon_decode_in_linear_time() {
+        let s = "&".repeat(1_000_000);
+        assert_eq!(decode_entities(&s), s);
     }
 
     #[test]

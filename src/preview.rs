@@ -190,12 +190,12 @@ pub fn width_changed(h: HWND) -> bool {
 
 /// Show `md` in the theme's colors, keeping the scroll position (theme changes
 /// re-render). `dir` is the file's folder, for pictures; `open` are the
-/// `<details>` blocks that the user opened.
-pub fn render(h: HWND, md: &str, dir: Option<&Path>, open: &[u32]) {
+/// `<details>` blocks that the user toggled.
+pub fn render(h: HWND, md: &str, dir: Option<&Path>, toggled: &[u32]) {
     let (bg, c) = colors();
     let width = text_width(h);
     let picture = |url: &str| load_picture(url, dir);
-    let opts = markdown::Options { width, open_details: open, picture: &picture, code_char: code_char(h) };
+    let opts = markdown::Options { width, toggled_details: toggled, picture: &picture, code_char: code_char(h) };
     let mut rtf = markdown::to_rtf(md, &c, &opts).into_bytes();
     rtf.push(0);
     unsafe {

@@ -29,7 +29,7 @@ pub fn parse(src: &str) -> Option<Value> {
         }
         lines.push(Line { indent: raw.len() - body.len(), text: body });
     }
-    let mut p = Parser { lines, at: 0 };
+    let mut p = Parser { lines, at: 0, depth: 0 };
     p.skip_blank();
     if p.at >= p.lines.len() {
         return None;
@@ -43,7 +43,13 @@ pub fn parse(src: &str) -> Option<Value> {
 struct Parser<'a> {
     lines: Vec<Line<'a>>,
     at: usize,
+    /// The nesting of `block` calls. Each level recurses on the stack.
+    depth: usize,
 }
+
+/// Ceiling: deeper front matter gives None (it shows as its text), so a
+/// hostile file cannot overflow the stack.
+const MAX_DEPTH: usize = 64;
 
 fn is_blank(t: &str) -> bool {
     t.is_empty() || t.starts_with('#')
@@ -58,14 +64,20 @@ impl<'a> Parser<'a> {
 
     /// The node whose first line is at the current line, with this indent.
     fn block(&mut self, indent: usize) -> Option<Value> {
+        if self.depth >= MAX_DEPTH {
+            return None;
+        }
+        self.depth += 1;
         let t = self.lines[self.at].text;
-        if t == "-" || t.starts_with("- ") {
+        let v = if t == "-" || t.starts_with("- ") {
             self.seq(indent)
         } else if split_key(t).is_some() {
             self.map(indent)
         } else {
             None
-        }
+        };
+        self.depth -= 1;
+        v
     }
 
     fn seq(&mut self, indent: usize) -> Option<Value> {
@@ -271,7 +283,7 @@ fn closed_quote(s: &str, q: char) -> bool {
 /// A flow collection or a scalar.
 fn flow(s: &str) -> Option<Value> {
     let mut chars = s.char_indices().peekable();
-    let v = flow_node(s, &mut chars)?;
+    let v = flow_node(s, &mut chars, 0)?;
     match chars.peek() {
         None => Some(v),
         // A plain scalar with flow characters in it: `a [b]`.
@@ -288,7 +300,11 @@ fn skip_ws(it: &mut Chars) {
     }
 }
 
-fn flow_node(s: &str, it: &mut Chars) -> Option<Value> {
+/// `depth`: the brackets open around this node. Each one recurses on the stack: see MAX_DEPTH.
+fn flow_node(s: &str, it: &mut Chars, depth: usize) -> Option<Value> {
+    if depth >= MAX_DEPTH {
+        return None;
+    }
     skip_ws(it);
     match it.peek()?.1 {
         '[' => {
@@ -300,7 +316,7 @@ fn flow_node(s: &str, it: &mut Chars) -> Option<Value> {
                     it.next();
                     return Some(Value::Seq(items));
                 }
-                items.push(flow_item(s, it, &[',', ']'])?);
+                items.push(flow_item(s, it, &[',', ']'], depth)?);
                 skip_ws(it);
                 match it.next()?.1 {
                     ',' => {}
@@ -318,14 +334,14 @@ fn flow_node(s: &str, it: &mut Chars) -> Option<Value> {
                     it.next();
                     return Some(Value::Map(entries));
                 }
-                let key = match flow_item(s, it, &[':', ',', '}'])? {
+                let key = match flow_item(s, it, &[':', ',', '}'], depth)? {
                     Value::Str(k) => k,
                     _ => return None,
                 };
                 skip_ws(it);
                 let value = if it.peek()?.1 == ':' {
                     it.next();
-                    flow_item(s, it, &[',', '}'])?
+                    flow_item(s, it, &[',', '}'], depth)?
                 } else {
                     Value::Str(String::new())
                 };
@@ -347,11 +363,11 @@ fn flow_node(s: &str, it: &mut Chars) -> Option<Value> {
 }
 
 /// An item of a flow collection, up to one of `stops`.
-fn flow_item(s: &str, it: &mut Chars, stops: &[char]) -> Option<Value> {
+fn flow_item(s: &str, it: &mut Chars, stops: &[char], depth: usize) -> Option<Value> {
     skip_ws(it);
     let (start, c) = *it.peek()?;
     if c == '[' || c == '{' {
-        return flow_node(s, it);
+        return flow_node(s, it, depth + 1);
     }
     if c == '"' || c == '\'' {
         it.next();
@@ -433,6 +449,15 @@ mod tests {
 
     fn map(e: &[(&str, Value)]) -> Value {
         Value::Map(e.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+    }
+
+    #[test]
+    fn deep_nesting_gives_none_and_does_not_overflow_the_stack() {
+        assert_eq!(parse(&format!("{}x", "- ".repeat(100_000))), None);
+        assert_eq!(parse(&format!("a: {}", "[".repeat(100_000))), None);
+        assert!(parse(&format!("a: {}1{}", "[".repeat(10), "]".repeat(10))).is_some());
+        assert_eq!(parse(&format!("a: \"{}\"", "[".repeat(100))), Some(map(&[("a", s(&"[".repeat(100)))])));
+        assert_eq!(parse(&format!("a: [it's, {}", "[".repeat(100_000))), None);
     }
 
     #[test]

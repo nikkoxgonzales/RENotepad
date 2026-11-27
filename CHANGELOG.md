@@ -2,6 +2,18 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-28 — 0.7.1:
+  - Markdown preview: a word with an accent or a non-Latin letter before a dot
+    (`Café.`) closed the app. It now shows.
+  - `<details open>` starts open, as on GitHub. A click closes it.
+  - A `<pre>` with no `</pre>` now shows the rest of the file, not nothing.
+  - Deep nesting in front matter, a huge `<ol start>`, a huge picture size or
+    a long run of `&` can no longer close or freeze the app.
+  - A list that starts at 0 inside another list shows `0.`, not `.`.
+  - A `<details>` in a table cell no longer opens a closed block around the table.
+  - After Save As to another folder, the preview shows the pictures of the new
+    folder. Opening a file resets the open or closed state of its `<details>`.
+
 - 2026-11-28 — 0.7.0:
   - The Markdown preview looks like GitHub's rendering: GitHub's colors, sizes
     and spacing, underlined h1 and h2, quote bars, code blocks with syntax

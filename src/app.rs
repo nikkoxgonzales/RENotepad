@@ -133,7 +133,7 @@ struct Doc {
     path: Option<String>,
     encoding: Encoding,
     zoom: i32,
-    /// The preview's `<details>` blocks that the user opened.
+    /// The preview's `<details>` blocks that the user toggled (opened or closed).
     details: Vec<u32>,
 }
 
@@ -1327,6 +1327,8 @@ impl App {
         let d = self.doc_mut();
         d.path = Some(path.to_string());
         d.encoding = enc;
+        // The toggled `<details>` numbers belong to the text that this load replaced.
+        d.details.clear();
         if text::is_log_file(&content) {
             let end = content.len();
             unsafe {
@@ -1363,9 +1365,14 @@ impl App {
             return false;
         }
         let d = self.doc_mut();
+        let moved = d.path.as_deref().map(|p| std::path::Path::new(p).parent()) != Some(std::path::Path::new(path).parent());
         d.path = Some(path.to_string());
         d.encoding = enc;
         settings::add_recent(path);
+        if moved {
+            // Pictures and relative links resolve against the new folder.
+            self.render_preview(self.cur);
+        }
         unsafe { SendMessageW(self.edit(), EM_SETMODIFY, 0, 0) };
         self.update_title();
         self.invalidate_chrome();
