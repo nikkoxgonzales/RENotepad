@@ -12,6 +12,8 @@ mod dialogs;
 mod encoding;
 mod filedlg;
 mod jumplist;
+mod markdown;
+mod preview;
 mod print;
 mod settings;
 mod status;

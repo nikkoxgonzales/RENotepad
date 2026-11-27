@@ -3,7 +3,7 @@ name = "renotepad"
 version = "0.4.0"
 edition = "2021"
 authors = ["Nikko Gonzales"]
-description = "RE:Notepad: Windows 10 Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look. Dark by default, nothing else added."
+description = "RE:Notepad: Windows 10 Notepad, reverse-engineered and rebuilt in Rust, with the Windows 11 look and a Markdown preview. Dark by default, nothing else added."
 license = "MIT"
 repository = "https://github.com/nikkoxgonzales/RENotepad"
 publish = false
@@ -48,6 +48,8 @@ windows = { version = "0.62", features = [
 # Already pulled in by `windows`; named here because the #[interface] macro
 # (jumplist.rs, the shell's undocumented jump list object) refers to it.
 windows-core = "0.62"
+# The Markdown preview (markdown.rs). No default features: no HTML writer, no SIMD.
+pulldown-cmark = { version = "0.13.6", default-features = false }
 
 [build-dependencies]
 # Compiles the generated .rc (icon + version info) with the Windows SDK's rc.exe.

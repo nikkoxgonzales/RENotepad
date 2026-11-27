@@ -7,7 +7,7 @@ use crate::dialogs::{self, Template, BUTTON, EDIT, LABEL_OFFSET};
 use crate::encoding::{self, Encoding};
 use crate::settings::{self, Settings};
 use crate::status::{self, Status};
-use crate::{filedlg, jumplist, muldiv, print, text, theme, update, wide};
+use crate::{filedlg, jumplist, markdown, muldiv, preview, print, text, theme, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_IGNORE_MERGE_ERRORS};
@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_DOWN,
-    VK_LEFT, VK_RIGHT,
+    VK_ESCAPE, VK_LEFT, VK_RIGHT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, PathCompactPathExW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -65,10 +65,12 @@ const IDM_AUTO_UPDATES: u16 = 50;
 const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
 const IDM_CLEAR_RECENT: u16 = 53;
+const IDM_PREVIEW: u16 = 54;
 /// File › Recent files: IDM_RECENT + index into settings::recent().
 const IDM_RECENT: u16 = 100;
 
 const EDIT_ID: usize = 15;
+const PREVIEW_ID: usize = 14;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
 const EDIT_PAD: i32 = 16;
 
@@ -90,6 +92,10 @@ const EC_ENDOFLINE_CRLF: usize = 1;
 
 const MAX_FILE: u64 = 1 << 30;
 
+/// A clicked preview link, posted to ourselves: LPARAM = Box<String> (the URL).
+/// Opening a tab inside RichEdit's own click notification is not safe.
+const WM_OPEN_LINK: u32 = WM_APP + 3;
+
 // Find / Replace dialog control ids.
 const IDC_FIND_TEXT: u16 = 1152;
 const IDC_REPLACE_TEXT: u16 = 1153;
@@ -103,6 +109,9 @@ const IDC_REPLACE_ALL: u16 = 1025;
 /// One tab: its own edit control (so undo stays per tab), file and encoding.
 struct Doc {
     edit: HWND,
+    /// The Markdown preview while this tab shows it, else null. Made from the
+    /// editor text on each switch to it, and destroyed on the way back.
+    preview: HWND,
     path: Option<String>,
     encoding: Encoding,
     zoom: i32,
@@ -284,7 +293,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             settings::set_recent_imported();
             jumplist::run_async(hwnd, jumplist::IMPORT_RECENT, vec!["/ImportNotepadRecent".into()]);
         }
-        SetFocus(a.edit());
+        SetFocus(a.view());
         Some(())
     }
 }
@@ -316,6 +325,7 @@ fn accelerators(global: bool) -> HACCEL {
             (c, b'F' as u16, IDM_FIND),
             (c, b'H' as u16, IDM_REPLACE),
             (c, b'G' as u16, IDM_GOTO),
+            (cs, b'M' as u16, IDM_PREVIEW),
             (c, b'A' as u16, IDM_SELECT_ALL),
             (FVIRTKEY, VK_F5, IDM_TIME_DATE),
             (c, VK_OEM_PLUS, IDM_ZOOM_IN),
@@ -389,6 +399,8 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
         AppendMenuW(view, MF_POPUP, zoom as usize, w.as_ptr());
         add(view, IDM_STATUS_BAR, "&Status bar");
         add(view, IDM_WRAP, "&Word wrap");
+        sep(view);
+        add(view, IDM_PREVIEW, "&Markdown preview	Ctrl+Shift+M");
 
         let settings = CreatePopupMenu();
         add(settings, IDM_DARK, "&Dark mode");
@@ -419,6 +431,17 @@ impl App {
     /// The active tab's edit control.
     pub fn edit(&self) -> HWND {
         self.docs.get(self.cur).map_or(std::ptr::null_mut(), |d| d.edit)
+    }
+
+    /// The active tab's Markdown preview, or null while it shows the editor.
+    fn preview(&self) -> HWND {
+        self.docs.get(self.cur).map_or(std::ptr::null_mut(), |d| d.preview)
+    }
+
+    /// What the active tab shows: its preview or its editor. Takes the focus.
+    fn view(&self) -> HWND {
+        let p = self.preview();
+        if p.is_null() { self.edit() } else { p }
     }
 
     fn make_font(&mut self) {
@@ -495,6 +518,11 @@ impl App {
                 MoveWindow(edit, 0, top, rc.right + extra_w, (rc.bottom - sh - top).max(0) + extra_h, 1);
                 self.pad_edit(edit);
             }
+            let p = self.preview();
+            if !p.is_null() {
+                MoveWindow(p, 0, top, rc.right, (rc.bottom - sh - top).max(0), 1);
+                self.pad_edit(p);
+            }
             MoveWindow(self.status.hwnd, 0, rc.bottom - sh, rc.right, sh, 1);
             ShowWindow(self.status.hwnd, if self.settings.status_bar { SW_SHOWNA } else { SW_HIDE });
         }
@@ -558,6 +586,8 @@ impl App {
 
     fn chrome_layout(&mut self) -> Layout {
         let w = self.client_width();
+        let md = self.docs.get(self.cur).and_then(|d| d.path.as_deref()).is_some_and(markdown::is_markdown);
+        self.chrome.preview = md.then(|| !self.preview().is_null());
         self.chrome.layout(w, self.docs.len(), self.cur)
     }
 
@@ -645,7 +675,8 @@ impl App {
             3 => "Unix (LF)",
             _ => "Windows (CRLF)",
         };
-        self.status.set(status::POS, &format!("Ln {ln}, Col {col}"));
+        let pos = if self.preview().is_null() { format!("Ln {ln}, Col {col}") } else { "Markdown preview".into() };
+        self.status.set(status::POS, &pos);
         self.status.set(status::CHARS, &chars);
         self.status.set(status::ZOOM, &format!("{}%", self.doc().zoom));
         self.status.set(status::EOL, eol);
@@ -742,7 +773,7 @@ impl App {
 
     fn new_tab(&mut self) {
         let edit = self.make_edit(&[], (0, 0), false, 100);
-        self.docs.push(Doc { edit, path: None, encoding: Encoding::Utf8, zoom: 100 });
+        self.docs.push(Doc { edit, preview: std::ptr::null_mut(), encoding: Encoding::Utf8, path: None, zoom: 100 });
         self.switch_to(self.docs.len() - 1);
     }
 
@@ -753,14 +784,17 @@ impl App {
         self.cur = i;
         unsafe {
             for (k, d) in self.docs.iter().enumerate() {
-                if k != i {
+                if k != i || !d.preview.is_null() {
                     ShowWindow(d.edit, SW_HIDE);
+                }
+                if k != i && !d.preview.is_null() {
+                    ShowWindow(d.preview, SW_HIDE);
                 }
             }
             self.layout();
-            ShowWindow(self.edit(), SW_SHOW);
+            ShowWindow(self.view(), SW_SHOW);
             SendMessageW(self.edit(), EM_SCROLLCARET, 0, 0);
-            SetFocus(self.edit());
+            SetFocus(self.view());
         }
         self.fit_scrollbars();
         self.update_title();
@@ -792,7 +826,12 @@ impl App {
             return true;
         }
         let d = self.docs.remove(i);
-        unsafe { DestroyWindow(d.edit) };
+        unsafe {
+            DestroyWindow(d.edit);
+            if !d.preview.is_null() {
+                DestroyWindow(d.preview);
+            }
+        }
         let next = if self.cur > i { self.cur - 1 } else { self.cur.min(self.docs.len() - 1) };
         self.switch_to(next);
         true
@@ -826,6 +865,54 @@ impl App {
     fn cycle_tab(&mut self, forward: bool) {
         let n = self.docs.len();
         self.switch_to(if forward { (self.cur + 1) % n } else { (self.cur + n - 1) % n });
+    }
+
+    /// Show the active tab as formatted Markdown (on) or as its text (off).
+    fn set_preview(&mut self, on: bool) {
+        if on == !self.preview().is_null() {
+            return;
+        }
+        unsafe {
+            if on {
+                // Find and Replace act on the hidden text: close them.
+                if !self.find_dlg.is_null() {
+                    DestroyWindow(self.find_dlg);
+                }
+                let p = preview::create(self.hwnd, PREVIEW_ID);
+                SetWindowSubclass(p, Some(preview_subclass), 1, 0);
+                theme::apply_control(p, "DarkMode_Explorer");
+                let zoom = self.doc().zoom;
+                if zoom != 100 {
+                    SendMessageW(p, EM_SETZOOM, zoom as usize, 100);
+                }
+                preview::render(p, &String::from_utf16_lossy(&get_edit_text(self.edit())));
+                SetWindowPos(self.status.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                self.doc_mut().preview = p;
+            } else {
+                // Cleared first: destroying the focused preview sends WM_SETFOCUS, which focuses view().
+                let p = std::mem::replace(&mut self.doc_mut().preview, std::ptr::null_mut());
+                DestroyWindow(p);
+            }
+        }
+        self.switch_to(self.cur);
+    }
+
+    /// A link clicked in the preview: web links go to the browser, Markdown files open in a tab.
+    fn open_link(&mut self, url: &str) {
+        let dir = self.doc().path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(|d| d.to_path_buf());
+        match markdown::resolve(url, dir.as_deref()) {
+            markdown::Target::Web(u) => open_url(self.hwnd, &u),
+            markdown::Target::File(p) => {
+                // Normalized, so the already-open check in open_path matches.
+                let p = std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned();
+                if std::path::Path::new(&p).is_file() {
+                    self.open_path(&p, None);
+                } else {
+                    self.error(&format!("Cannot find the {p} file."));
+                }
+            }
+            markdown::Target::Nothing => {}
+        }
     }
 
     // ------------------------------------------------------------ files
@@ -874,8 +961,9 @@ impl App {
         }
     }
 
-    /// Load a file into the active tab.
+    /// Load a file into the active tab. A file always opens in the editor.
     fn load(&mut self, path: &str, forced: Option<Encoding>) -> bool {
+        self.set_preview(false);
         match std::fs::metadata(path) {
             Ok(m) if m.len() >= MAX_FILE => {
                 self.error(&format!("The file {path} is too large for {APP_NAME}."));
@@ -1141,18 +1229,21 @@ impl App {
         self.doc_mut().zoom = z;
         unsafe { SendMessageW(self.edit(), EM_SETZOOM, z as usize, 100) };
         self.pad_edit(self.edit());
+        let p = self.preview();
+        if !p.is_null() {
+            unsafe { SendMessageW(p, EM_SETZOOM, z as usize, 100) };
+            self.pad_edit(p);
+        }
         self.fit_scrollbars();
         self.update_status();
     }
 
-    /// The control zooms itself on Ctrl+wheel; read back what it chose.
+    /// The control zooms itself on Ctrl+wheel; read back what it chose, and
+    /// give the tab's other control (editor or preview) the same zoom.
     fn sync_zoom(&mut self) {
         let (mut num, mut den) = (0i32, 0i32);
-        unsafe { SendMessageW(self.edit(), EM_GETZOOM, &mut num as *mut i32 as usize, &mut den as *mut i32 as isize) };
-        self.doc_mut().zoom = if num > 0 && den > 0 { (num * 100 + den / 2) / den } else { 100 };
-        self.pad_edit(self.edit());
-        self.fit_scrollbars();
-        self.update_status();
+        unsafe { SendMessageW(self.view(), EM_GETZOOM, &mut num as *mut i32 as usize, &mut den as *mut i32 as isize) };
+        self.set_zoom(if num > 0 && den > 0 { (num * 100 + den / 2) / den } else { 100 });
     }
 
     fn toggle_wrap(&mut self) {
@@ -1208,6 +1299,10 @@ impl App {
         theme::apply_window(self.hwnd);
         for d in &self.docs {
             theme::apply_control(d.edit, "DarkMode_Explorer");
+            if !d.preview.is_null() {
+                theme::apply_control(d.preview, "DarkMode_Explorer");
+                preview::render(d.preview, &String::from_utf16_lossy(&get_edit_text(d.edit)));
+            }
         }
         unsafe {
             if !self.find_dlg.is_null() {
@@ -1323,20 +1418,26 @@ impl App {
         }
         unsafe {
             let e = self.edit();
-            let (s, end) = self.sel();
+            // The preview is read-only: only Copy and Select all act on it.
+            let editing = self.preview().is_null();
+            let (mut s, mut end) = (0u32, 0u32);
+            SendMessageW(self.view(), EM_GETSEL, &mut s as *mut u32 as usize, &mut end as *mut u32 as isize);
             let has_sel = end > s;
-            let has_text = GetWindowTextLengthW(e) > 0;
+            let has_text = editing && GetWindowTextLengthW(e) > 0;
             let en = |id: u16, on: bool| {
                 EnableMenuItem(menu, id as u32, MF_BYCOMMAND | if on { MF_ENABLED } else { MF_GRAYED });
             };
             let ck = |id: u16, on: bool| {
                 CheckMenuItem(menu, id as u32, MF_BYCOMMAND | if on { MF_CHECKED } else { MF_UNCHECKED });
             };
-            en(IDM_UNDO, SendMessageW(e, EM_CANUNDO, 0, 0) != 0);
-            en(IDM_CUT, has_sel);
+            en(IDM_UNDO, editing && SendMessageW(e, EM_CANUNDO, 0, 0) != 0);
+            en(IDM_CUT, editing && has_sel);
             en(IDM_COPY, has_sel);
-            en(IDM_DELETE, has_sel);
-            en(IDM_PASTE, IsClipboardFormatAvailable(13 /* CF_UNICODETEXT */) != 0);
+            en(IDM_DELETE, editing && has_sel);
+            en(IDM_PASTE, editing && IsClipboardFormatAvailable(13 /* CF_UNICODETEXT */) != 0);
+            en(IDM_GOTO, editing);
+            en(IDM_TIME_DATE, editing);
+            ck(IDM_PREVIEW, !editing);
             en(IDM_FIND, has_text);
             en(IDM_FIND_NEXT, has_text);
             en(IDM_FIND_PREV, has_text);
@@ -1350,7 +1451,11 @@ impl App {
     }
 
     fn command(&mut self, id: u16) {
-        let e = self.edit();
+        const EDITING_ONLY: [u16; 10] = [IDM_UNDO, IDM_CUT, IDM_PASTE, IDM_DELETE, IDM_FIND, IDM_FIND_NEXT, IDM_FIND_PREV, IDM_REPLACE, IDM_GOTO, IDM_TIME_DATE];
+        if !self.preview().is_null() && EDITING_ONLY.contains(&id) {
+            return; // an accelerator: the menu items are greyed out
+        }
+        let e = self.view();
         unsafe {
             match id {
                 IDM_NEW => self.new_tab(),
@@ -1436,6 +1541,7 @@ impl App {
                     }
                 }
                 IDM_CLEAR_RECENT => settings::set_recent(&[]),
+                IDM_PREVIEW => self.set_preview(self.preview().is_null()),
                 _ if (IDM_RECENT..IDM_RECENT + settings::RECENT_MAX as u16).contains(&id) => self.open_recent((id - IDM_RECENT) as usize),
                 _ => {}
             }
@@ -1608,7 +1714,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_MOUSEMOVE => {
             let (x, y) = point(lparam);
             let h = a.hit(x, y);
-            a.set_hover(if matches!(h, Hit::Tab(_) | Hit::TabClose(_) | Hit::NewTab | Hit::Menu(_)) { h } else { Hit::Nothing });
+            a.set_hover(if matches!(h, Hit::Tab(_) | Hit::TabClose(_) | Hit::NewTab | Hit::Menu(_) | Hit::Preview) { h } else { Hit::Nothing });
             if !a.tracking_mouse {
                 a.tracking_mouse = true;
                 a.track_leave(false);
@@ -1624,8 +1730,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let (x, y) = point(lparam);
             match a.hit(x, y) {
                 Hit::Tab(i) => a.switch_to(i),
-                h @ (Hit::TabClose(_) | Hit::NewTab) => {
+                h @ (Hit::TabClose(_) | Hit::NewTab | Hit::Preview) => {
                     a.chrome.pressed = h;
+                    a.invalidate_chrome();
                     SetCapture(hwnd);
                 }
                 Hit::Menu(i) => a.track_menu(i, false),
@@ -1645,9 +1752,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         a.close_tab(i);
                     }
                     Hit::NewTab => a.new_tab(),
+                    Hit::Preview => a.command(IDM_PREVIEW),
                     _ => {}
                 }
             }
+            a.invalidate_chrome();
             0
         }
         WM_MBUTTONUP => {
@@ -1705,18 +1814,20 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             a.window_active = (wparam & 0xFFFF) != WA_INACTIVE as usize;
             a.invalidate_chrome();
             if a.window_active {
-                SetFocus(a.edit());
+                SetFocus(a.view());
             }
             0
         }
         WM_SETFOCUS => {
-            SetFocus(a.edit());
+            SetFocus(a.view());
             0
         }
         WM_COMMAND => {
             let id = (wparam & 0xFFFF) as u16;
             let code = (wparam >> 16) as u32;
-            if a.docs.iter().any(|d| d.edit == lparam as HWND) {
+            let from = lparam as HWND;
+            // Null = a menu or accelerator command (a tab with no preview has a null one too).
+            if !from.is_null() && a.docs.iter().any(|d| d.edit == from || d.preview == from) {
                 if lparam as HWND == a.edit() {
                     if code == EN_CHANGE {
                         a.update_title();
@@ -1729,6 +1840,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 return 0;
             }
             a.command(id);
+            0
+        }
+        WM_NOTIFY => {
+            if let Some(url) = preview::clicked_link(lparam) {
+                PostMessageW(hwnd, WM_OPEN_LINK, 0, Box::into_raw(Box::new(url)) as isize);
+            }
+            0
+        }
+        WM_OPEN_LINK => {
+            let url = *Box::from_raw(lparam as *mut String);
+            a.open_link(&url);
             0
         }
         WM_INITMENUPOPUP => {
@@ -1852,6 +1974,15 @@ unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         }
     }
     r
+}
+
+/// The preview: Esc goes back to the editor, and Ctrl+wheel zooms the tab.
+unsafe extern "system" fn preview_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+    if msg == WM_KEYDOWN && wparam as u16 == VK_ESCAPE {
+        PostMessageW(GetParent(hwnd), WM_COMMAND, IDM_PREVIEW as usize, 0);
+        return 0;
+    }
+    edit_subclass(hwnd, msg, wparam, lparam, 0, 0)
 }
 
 unsafe extern "system" fn font_hook(dlg: HWND, msg: u32, wparam: WPARAM, _: LPARAM) -> usize {

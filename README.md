@@ -137,7 +137,16 @@ It's the classic Notepad, minus the extras.
 - **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous
   (F3 / Shift+F3), Replace, Go to, Select all, Time/Date (F5), Font.
 - **View:** Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0 / Ctrl+wheel), Status bar,
-  Word wrap.
+  Word wrap, Markdown preview (Ctrl+Shift+M).
+- **Markdown preview**, the one addition Windows 10 Notepad never had:
+  - A *Preview* button appears in the menu bar for `.md` files. It shows the
+    file formatted, read-only, from what's in the editor (unsaved changes too).
+    *Edit* or Esc goes back.
+  - Headings, bold, italic, strikethrough, lists, task lists, quotes, code,
+    tables and links. Web links open in your browser; a link to another
+    Markdown file opens it in a tab.
+  - Raw HTML shows as text, and images as a placeholder: the preview never
+    runs anything or loads anything from the internet.
 - **Status bar:**
   - Line and column, then the character count ("5 of 120 characters" while
     text is selected).
@@ -212,6 +221,9 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 - **Portable copy:** Windows shows jump list entries only for file types the app
   is registered for, which the installer does. A portable copy's jump list may
   stay empty.
+- **Markdown preview:** images show as a placeholder, quotes have no side bar,
+  code blocks are shaded behind the text only, and a very wide table runs past
+  the window's right edge. Find works on the text, not on the preview.
 - **Left out on purpose:** the formatting toolbar, Copilot, spell check and
   session restore.
 
@@ -226,6 +238,8 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 - `src/dialogs.rs`: Find/Replace, the message box, Go to line, About.
 - `src/update.rs`: the update check.
 - `src/jumplist.rs`: the taskbar identity and the pin import from Notepad.
+- `src/markdown.rs`, `src/preview.rs`: the Markdown preview (Markdown to RTF,
+  unit-tested; the read-only RichEdit that shows it).
 - `src/encoding.rs`, `src/text.rs`: the pure rules, unit-tested.
 - `src/theme.rs`: dark and light palettes and drawing helpers.
 - `src/print.rs`, `src/filedlg.rs`, `src/settings.rs`.
@@ -254,6 +268,8 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
 - Unreleased:
+  - Markdown preview: a *Preview* button for `.md` files, also *View › Markdown
+    preview* (Ctrl+Shift+M).
   - *File › Recent files*: the last 10 files, seeded once from Notepad's
     recent files.
   - Fixed a crash when typing with the cursor scrolled out of view (word wrap on).

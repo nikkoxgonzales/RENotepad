@@ -42,6 +42,12 @@ const GLYPH_RESTORE: u16 = 0xE923;
 const GLYPH_CLOSE: u16 = 0xE8BB;
 const GLYPH_ADD: u16 = 0xE710;
 const GLYPH_SETTINGS: u16 = 0xE713;
+const GLYPH_PLAY: u16 = 0xE768;
+const GLYPH_EDIT: u16 = 0xE70F;
+/// The Markdown preview button: its labels, and its gaps at 96 DPI.
+const PREVIEW_LABELS: [&str; 2] = ["Preview", "Edit"];
+const PREVIEW_PAD: i32 = 10;
+const PREVIEW_GAP: i32 = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hit {
@@ -51,6 +57,7 @@ pub enum Hit {
     TabClose(usize),
     NewTab,
     Menu(usize),
+    Preview,
     Min,
     Max,
     Close,
@@ -73,6 +80,8 @@ pub struct Layout {
     pub new_tab: RECT,
     pub buttons: [RECT; 3],
     pub menus: [RECT; MENU_COUNT],
+    /// The Markdown preview button, left of the gear, when it shows and fits.
+    pub preview: Option<RECT>,
 }
 
 pub struct Chrome {
@@ -84,6 +93,9 @@ pub struct Chrome {
     glyph_16: HFONT,
     icon: HICON,
     menu_w: [i32; 3],
+    preview_w: [i32; 2],
+    /// The active tab is Markdown: Some(previewing) shows the preview button.
+    pub preview: Option<bool>,
     pub hover: Hit,
     pub pressed: Hit,
     pub open_menu: Option<usize>,
@@ -112,6 +124,8 @@ impl Chrome {
             glyph_16: null,
             icon: null,
             menu_w: [0; 3],
+            preview_w: [0; 2],
+            preview: None,
             hover: Hit::Nothing,
             pressed: Hit::Nothing,
             open_menu: None,
@@ -148,6 +162,12 @@ impl Chrome {
             let hdc = GetDC(std::ptr::null_mut());
             let old = SelectObject(hdc, self.menu_font);
             for (w, label) in self.menu_w.iter_mut().zip(MENU_LABELS) {
+                let t = wide(label);
+                let mut r = rect(0, 0, 0, 0);
+                DrawTextW(hdc, t.as_ptr(), -1, &mut r, DT_CALCRECT | DT_SINGLELINE);
+                *w = r.right;
+            }
+            for (w, label) in self.preview_w.iter_mut().zip(PREVIEW_LABELS) {
                 let t = wide(label);
                 let mut r = rect(0, 0, 0, 0);
                 DrawTextW(hdc, t.as_ptr(), -1, &mut r, DT_CALCRECT | DT_SINGLELINE);
@@ -195,7 +215,12 @@ impl Chrome {
             x += w + s(MENU_GAP);
         }
         menus[SETTINGS_MENU] = rect(width - s(44), y0, width - s(8), y1);
-        Layout { tabs, new_tab, buttons, menus }
+        let preview = self.preview.and_then(|on| {
+            let w = 2 * s(PREVIEW_PAD) + s(ICON) + s(PREVIEW_GAP) + self.preview_w[on as usize];
+            let right = menus[SETTINGS_MENU].left - s(MENU_GAP);
+            (right - w > menus[SETTINGS_MENU - 1].right + s(MENU_GAP)).then(|| rect(right - w, y0, right, y1))
+        });
+        Layout { tabs, new_tab, buttons, menus, preview }
     }
 
     fn tab_close_rect(&self, tab: &RECT) -> RECT {
@@ -221,6 +246,9 @@ impl Chrome {
                 return Hit::NewTab;
             }
             return Hit::Caption;
+        }
+        if l.preview.is_some_and(|r| contains(&r, x, y)) {
+            return Hit::Preview;
         }
         for (i, r) in l.menus.iter().enumerate() {
             if contains(r, x, y) {
@@ -283,6 +311,18 @@ impl Chrome {
                     let flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE | if self.show_accel { 0 } else { DT_HIDEPREFIX };
                     text(mem, self.menu_font, MENU_LABELS[i], r, p.text, flags);
                 }
+            }
+
+            if let (Some(r), Some(on)) = (l.preview, self.preview) {
+                if self.pressed == Hit::Preview {
+                    theme::round_rect(mem, r, self.s(4), false, p.pressed, p.surface);
+                } else if self.hover == Hit::Preview {
+                    theme::round_rect(mem, r, self.s(4), false, p.hover, p.surface);
+                }
+                let icon = rect(r.left + self.s(PREVIEW_PAD), r.top, r.left + self.s(PREVIEW_PAD) + self.s(ICON), r.bottom);
+                glyph(mem, self.glyph_12, if on { GLYPH_EDIT } else { GLYPH_PLAY }, &icon, p.text);
+                let label = rect(icon.right + self.s(PREVIEW_GAP), r.top, r.right, r.bottom);
+                text(mem, self.menu_font, PREVIEW_LABELS[on as usize], &label, p.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
             }
 
             BitBlt(hdc, 0, 0, width, h, mem, 0, 0, SRCCOPY);
