@@ -140,6 +140,8 @@ struct Writer {
     cell: Option<(String, usize)>,
     /// Inside an image: whether its alt text has started.
     image: Option<bool>,
+    /// Inside a heading: its font size, for inline code in it.
+    heading: Option<u32>,
 }
 
 impl Writer {
@@ -174,6 +176,11 @@ impl Writer {
         if let Some(m) = self.marker.take() {
             self.out.push_str(&m);
         }
+        // Before the alt text's first text or style group, so the group does not take it.
+        if self.image == Some(false) {
+            self.image = Some(true);
+            self.out.push_str(": ");
+        }
     }
 
     fn end(&mut self) {
@@ -184,31 +191,38 @@ impl Writer {
             self.out.push_str("\\par\n");
             self.open = false;
             // RichEdit stretches a highlight on the last line down through the
-            // space after the paragraph. Move that space to a 1-point paragraph.
-            let gap = format!("\\sa{GAP}\\");
-            let para = &self.out[self.para_at..];
-            if para.contains("\\highlight") {
+            // space after the paragraph, and on the first line up through the
+            // space before it (headings). Move that space to 1-point paragraphs.
+            if self.out[self.para_at..].contains("\\highlight") {
                 // Only in the properties (up to the first space), never in the text.
-                let props = &para[..para.find(' ').unwrap_or(para.len())];
-                if let Some(i) = props.find(&gap) {
-                    let i = self.para_at + i;
-                    self.out.replace_range(i..i + gap.len() - 1, "\\sa0");
-                    self.out.push_str(&format!("\\pard\\plain\\fs2\\sa{}\\par\n", GAP - 20));
+                // \sa first: it comes after \sb, so its position stays right.
+                if let Some(sa) = self.zero_space("\\sa") {
+                    self.out.push_str(&format!("\\pard\\plain\\fs2\\sa{}\\par\n", sa - 20));
+                }
+                if let Some(sb) = self.zero_space("\\sb") {
+                    self.out.insert_str(self.para_at, &format!("\\pard\\plain\\fs2\\sa{}\\par\n", sb - 20));
                 }
             }
         }
+    }
+
+    /// Set the open paragraph's `word` space (\sa or \sb) to 0 when it is over
+    /// 1 point. Returns the old value in twips.
+    fn zero_space(&mut self, word: &str) -> Option<u32> {
+        let para = &self.out[self.para_at..];
+        let props = &para[..para.find(' ').unwrap_or(para.len())];
+        let i = props.find(word)? + word.len();
+        let digits = props[i..].bytes().take_while(u8::is_ascii_digit).count();
+        let v: u32 = props[i..i + digits].parse().ok().filter(|&v| v > 20)?;
+        let at = self.para_at + i;
+        self.out.replace_range(at..at + digits, "0");
+        Some(v)
     }
 
     fn text(&mut self, t: &str) {
         if let Some(code) = &mut self.code {
             code.push_str(t);
             return;
-        }
-        if let Some(started) = &mut self.image {
-            if !*started {
-                *started = true;
-                self.out.push_str(": ");
-            }
         }
         self.flush();
         if let Some((_, chars)) = &mut self.cell {
@@ -236,7 +250,18 @@ impl Writer {
                 };
                 let color = if level == HeadingLevel::H6 { MUTED } else { self.color() };
                 let left = self.left();
-                self.begin(format!("\\pard\\sb{before}\\sa120\\li{left}\\plain\\f0\\fs{size}\\cf{color}\\b "));
+                // The first block of a list item (`- # Title`): it takes the item's
+                // marker and hanging indent, so the bullet does not stand alone.
+                let marker = self.marker.take();
+                let hang = if marker.is_some() {
+                    self.pending = None;
+                    format!("\\fi-{INDENT}\\tx{left}")
+                } else {
+                    String::new()
+                };
+                self.begin(format!("\\pard\\sb{before}\\sa120\\li{left}{hang}\\plain\\f0\\fs{size}\\cf{color}\\b "));
+                self.marker = marker;
+                self.heading = Some(size);
             }
             Tag::BlockQuote(_) => {
                 self.end();
@@ -299,7 +324,11 @@ impl Writer {
 
     fn finish(&mut self, tag: TagEnd) {
         match tag {
-            TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item => self.end(),
+            TagEnd::Paragraph | TagEnd::Item => self.end(),
+            TagEnd::Heading(_) => {
+                self.heading = None;
+                self.end();
+            }
             TagEnd::BlockQuote(_) => {
                 self.end();
                 self.quote -= 1;
@@ -388,6 +417,12 @@ pub fn to_rtf(md: &str, c: &Colors) -> String {
     let rgb = |v: u32| format!("\\red{}\\green{}\\blue{};", v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF);
     w.out.push_str("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fswiss Segoe UI;}{\\f1\\fmodern Consolas;}}");
     w.out.push_str(&format!("{{\\colortbl;{}{}{}{}{}}}\n", rgb(c.text), rgb(c.muted), rgb(c.link), rgb(c.code_bg), rgb(c.rule)));
+    let (meta, md) = front_matter(md);
+    if let Some(meta) = meta.filter(|m| !m.is_empty()) {
+        w.start(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Indented));
+        w.text(&meta.replace('\r', ""));
+        w.finish(TagEnd::CodeBlock);
+    }
     let opts = Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
     for ev in Parser::new_ext(md, opts) {
         match ev {
@@ -395,7 +430,9 @@ pub fn to_rtf(md: &str, c: &Colors) -> String {
             Event::End(tag) => w.finish(tag),
             Event::Text(t) => w.text(&t),
             Event::Code(t) => {
-                w.raw(&format!("{{\\f1\\fs{}\\highlight{CODE_BG} ", CODE + 1));
+                // In a heading, a body-size highlight box looks tall beside the big letters.
+                let size = w.heading.map_or(CODE + 1, |s| s * 9 / 10);
+                w.raw(&format!("{{\\f1\\fs{size}\\highlight{CODE_BG} "));
                 w.text(&t);
                 w.out.push('}');
             }
@@ -415,6 +452,35 @@ pub fn to_rtf(md: &str, c: &Colors) -> String {
     w.end();
     w.out.push('}');
     w.out
+}
+
+/// Split YAML (`---` … `---` or `...`) or TOML (`+++` … `+++`) front matter off
+/// the top of the file: (its lines, the rest). Only at the very top, and the
+/// line after the opener must not be blank, so a file that starts with a rule
+/// keeps its body. pulldown-cmark's metadata option would also take a `---`
+/// rule pair later in the file, so it stays off.
+fn front_matter(md: &str) -> (Option<&str>, &str) {
+    let src = md.strip_prefix('\u{FEFF}').unwrap_or(md);
+    let mut lines = src.split_inclusive('\n');
+    let open = lines.next().map(|l| l.trim_end()).unwrap_or("");
+    let close: &[&str] = match open {
+        "---" => &["---", "..."],
+        "+++" => &["+++"],
+        _ => return (None, md),
+    };
+    let start = src.find('\n').map_or(src.len(), |i| i + 1);
+    let mut at = start;
+    for (i, line) in lines.enumerate() {
+        let t = line.trim_end();
+        if i == 0 && t.is_empty() {
+            break;
+        }
+        if close.contains(&t) {
+            return (Some(src[start..at].trim_end()), &src[at + line.len()..]);
+        }
+        at += line.len();
+    }
+    (None, md)
 }
 
 fn escape(out: &mut String, s: &str) {
@@ -568,6 +634,33 @@ mod tests {
     }
 
     #[test]
+    fn a_heading_as_a_list_item_keeps_its_bullet_on_its_line() {
+        let r = rtf("- # Title\n- two");
+        assert!(r.contains("\\b \\u8226?\\tab Title\\par"), "{r}");
+        assert!(!r.contains("\\u8226?\\tab \\par"), "no bullet alone: {r}");
+    }
+
+    #[test]
+    fn inline_code_in_a_heading_scales_with_the_heading() {
+        assert!(rtf("## The `x` call").contains("{\\f1\\fs28\\highlight4 x}"));
+        assert!(rtf("## h\n\nthe `x` call").contains("{\\f1\\fs20\\highlight4 x}"), "body size after the heading");
+    }
+
+    #[test]
+    fn image_alt_text_that_starts_with_a_style_keeps_the_separator_outside() {
+        assert!(rtf("![`icon`](a.png)").contains("{\\cf2 [Image: {\\f1\\fs20\\highlight4 icon}]}"));
+        assert!(rtf("![*big* logo](a.png)").contains("{\\cf2 [Image: {\\i big} logo]}"));
+    }
+
+    #[test]
+    fn a_heading_with_inline_code_moves_its_space_after_too() {
+        let r = rtf("## The `x` call\n\nbody");
+        assert!(r.contains("\\pard\\plain\\fs2\\sa220\\par\n\\pard\\sb0\\sa0\\li"), "space before in a spacer: {r}");
+        assert!(r.contains("\\par\n\\pard\\plain\\fs2\\sa100\\par"), "space after in a spacer: {r}");
+        assert!(rtf("## plain").contains("\\sb240\\sa120"), "a heading without code keeps its spacing");
+    }
+
+    #[test]
     fn quotes_are_indented_and_muted() {
         assert!(rtf("> said").contains("\\li360\\plain\\f0\\fs22\\cf2 said\\par"));
     }
@@ -586,6 +679,34 @@ mod tests {
         assert_eq!(r.matches("\\clcbpat4").count(), 2, "header cells only");
         assert!(r.contains("\\pard\\intbl\\qc\\plain\\f0\\fs22\\cf1\\b A\\cell"));
         assert!(r.contains("\\pard\\intbl\\qr\\plain\\f0\\fs22\\cf1 2\\cell"));
+    }
+
+    #[test]
+    fn front_matter_shows_as_a_code_block_not_a_rule_and_heading() {
+        for md in ["---\ntitle: Notes\ntags: [a, b]\n---\n\n# Body", "+++\r\ntitle = \"Notes\"\r\n+++\r\n\r\n# Body", "---\ntitle: x\n...\n# Body"] {
+            let r = rtf(md);
+            assert!(!r.contains("\\trowd"), "no rule: {md}");
+            assert!(r.contains("\\f1\\fs19\\cf1\\highlight4 title"), "{r}");
+            assert!(r.contains("\\fs40\\cf1\\b Body\\par"), "{md}");
+        }
+        let r = rtf("---\r\ntitle: Notes\r\ntags: [a, b]\r\n---\r\n");
+        assert!(r.contains("title: Notes\\line tags: [a, b]\\par"), "{r}");
+    }
+
+    #[test]
+    fn empty_front_matter_shows_nothing() {
+        let r = rtf("---\n---\n# Body");
+        assert!(!r.contains("\\highlight"), "{r}");
+        assert!(!r.contains("\\trowd"), "{r}");
+        assert!(r.contains("\\b Body\\par"), "{r}");
+    }
+
+    #[test]
+    fn dashes_that_are_not_front_matter_stay_rules() {
+        // A later rule pair, an unclosed one, and a blank line after the first `---`.
+        for md in ["text\n\n---\nnot: meta\n---\n", "---\ntitle: open", "---\n\ntitle: x\n---\n"] {
+            assert!(rtf(md).contains("\\trowd"), "{md}");
+        }
     }
 
     #[test]

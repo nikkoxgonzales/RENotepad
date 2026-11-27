@@ -2,6 +2,17 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-27 — 0.6.1:
+  - Markdown preview: front matter at the top of a file (YAML between `---`
+    lines, or TOML between `+++` lines) shows as a block of its own text. Before,
+    it showed as a rule and a heading.
+  - Inline code in a heading has the size of the heading, and its gray box
+    no longer reaches above or below the line.
+  - A heading as the first line of a list item (`- # Title`) keeps its bullet
+    on the same line.
+  - An image whose alt text starts with code or emphasis shows its label
+    correctly.
+
 - 2026-11-27 — 0.6.0:
   - **Folder pane:** a tree of one folder at the left of the window, off until
     you turn it on (*File › Open folder*, *View › Folder pane*, the button at

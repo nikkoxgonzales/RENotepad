@@ -24,7 +24,7 @@ $Dir = Join-Path $env:TEMP 'renotepad-preview'
 New-Item -ItemType Directory -Force $Dir | Out-Null
 $Readme = Join-Path $Dir 'README.md'
 [IO.File]::WriteAllText($Readme, "[other file](other.md)`r`n`r`n# Title`r`n`r`nSome **bold** and ``code``.`r`n`r`n- item`r`n- [x] done`r`n`r`n> quoted`r`n`r`n| A | B |`r`n|---|--:|`r`n| 1 | 2 |`r`n`r`n---`r`n`r`n``````r`nfn main() {}`r`n``````r`n")
-[IO.File]::WriteAllText((Join-Path $Dir 'other.md'), "# Other`r`n")
+[IO.File]::WriteAllText((Join-Path $Dir 'other.md'), "---`r`ntitle: Front`r`n---`r`n# Other`r`n")
 $Bullet = [string][char]0x2022
 $Checked = [string][char]0x2611
 $script:failed = $false
@@ -82,6 +82,9 @@ $l = [IntPtr](((Px 26) -shl 16) -bor (Px 30))
 [Q]::PostMessageW($pv, 0x201, [IntPtr]1, $l) | Out-Null; [Q]::PostMessageW($pv, 0x202, [IntPtr]0, $l) | Out-Null; Start-Sleep -Milliseconds 700
 Check 'a relative Markdown link opens in a tab' (Title $main) 'other.md - RENotepad'
 Check 'the linked file opens in the editor' ([Z.Kids]::Preview($main) -eq [IntPtr]::Zero) $true
+Cmd $main 54
+$t = PreviewText ([Z.Kids]::Preview($main))
+Check 'front matter shows as its text above the heading' ($t -match '^\s*title: Front\s+Other\s*$') $true
 
 [Q]::PostMessageW($main, $WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
 Check 'the window closes without a prompt' ($p.WaitForExit(3000)) $true
