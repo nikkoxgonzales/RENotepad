@@ -10,6 +10,7 @@ use crate::status::{self, Status};
 use crate::{filedlg, jumplist, muldiv, print, text, theme, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_IGNORE_MERGE_ERRORS};
 use windows_sys::Win32::System::DataExchange::IsClipboardFormatAvailable;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
@@ -121,6 +122,12 @@ struct MenuNav {
 
 thread_local! {
     static NAV: std::cell::Cell<MenuNav> = std::cell::Cell::new(MenuNav::default());
+    /// `fit_scrollbars` is running. Out of App for the same reason as NAV: it is
+    /// read by a re-entrant call while the outer one holds `&mut self`.
+    static FITTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `confirm_close_all` is prompting. A second close request (taskbar, a queued
+    /// Ctrl+Shift+W) reaches us through the prompt's message loop.
+    static CLOSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn nav() -> MenuNav {
@@ -492,16 +499,24 @@ impl App {
     /// Show only the scrollbars there is something to scroll for. Showing one
     /// narrows the text, which can only add lines, so this settles in a pass or two.
     fn fit_scrollbars(&mut self) {
+        // Resizing the editor makes it send EN_VSCROLL / EN_HSCROLL back before the
+        // new layout settles. Refitting from that half-done state flipped the bar
+        // back every time and recursed until the stack overflowed; the loop below
+        // re-checks once the layout has settled, so the nested call has nothing to do.
+        if FITTING.with(|f| f.replace(true)) {
+            return;
+        }
         for _ in 0..3 {
             let need = self.scrollbar_need();
             if need == self.bars {
-                return;
+                break;
             }
             self.bars = need;
             self.layout();
             // Resizing re-insets the text without re-scrolling; keep the caret in view.
             unsafe { SendMessageW(self.edit(), EM_SCROLLCARET, 0, 0) };
         }
+        FITTING.with(|f| f.set(false));
     }
 
     /// Inset the text like Windows 11 Notepad. The control resets this rect on
@@ -764,17 +779,23 @@ impl App {
         true
     }
 
-    /// Ask about every modified tab; false = cancelled.
+    /// Ask about every modified tab; false = cancelled, or already asking.
     fn confirm_close_all(&mut self) -> bool {
+        if CLOSING.with(|c| c.replace(true)) {
+            return false;
+        }
+        let mut ok = true;
         for i in 0..self.docs.len() {
             if self.doc_modified(i) {
                 self.switch_to(i);
                 if !self.check_save() {
-                    return false;
+                    ok = false;
+                    break;
                 }
             }
         }
-        true
+        CLOSING.with(|c| c.set(false));
+        ok
     }
 
     fn quit(&mut self) {
@@ -901,7 +922,7 @@ impl App {
                 encoding::encode(&content, enc, true).unwrap_or_default()
             }
         };
-        if let Err(e) = std::fs::write(path, bytes) {
+        if let Err(e) = write_file(path, &bytes) {
             self.error(&format!("{path}\n{e}"));
             return false;
         }
@@ -1057,7 +1078,7 @@ impl App {
             let (s, e) = self.sel();
             if e > s && e - s < 128 {
                 let content = get_edit_text(self.edit());
-                let picked = &content[s..e.min(content.len())];
+                let picked = &content[s.min(content.len())..e.min(content.len())];
                 if !picked.contains(&10) && !picked.contains(&13) {
                     self.settings.search = String::from_utf16_lossy(picked);
                 }
@@ -1390,6 +1411,32 @@ fn group(n: usize) -> String {
     out
 }
 
+/// Save without ever leaving a half-written file: write the new bytes beside the
+/// old file, flush them to disk, then swap them in. ReplaceFileW keeps the old
+/// file's attributes, ACL and creation time. Falls back to writing in place, like
+/// Notepad, when the folder won't take the temp file or the swap fails (some
+/// network shares). Ceiling: the swap turns a hard-linked file into a separate copy.
+fn write_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if !std::path::Path::new(path).exists() {
+        return std::fs::write(path, bytes);
+    }
+    let tmp = format!("{path}.{}.tmp", std::process::id());
+    let staged = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(bytes)?;
+        f.sync_all()
+    });
+    if staged.is_ok() {
+        let (target, staged) = (wide(path), wide(&tmp));
+        let null = std::ptr::null();
+        if unsafe { ReplaceFileW(target.as_ptr(), staged.as_ptr(), std::ptr::null(), REPLACEFILE_IGNORE_MERGE_ERRORS, null, null) } != 0 {
+            return Ok(());
+        }
+    }
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(path, bytes)
+}
+
 fn get_edit_text(edit: HWND) -> Vec<u16> {
     unsafe {
         let n = GetWindowTextLengthW(edit);
@@ -1633,8 +1680,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let drop = wparam as HDROP;
             let count = DragQueryFileW(drop, u32::MAX, std::ptr::null_mut(), 0);
             let mut paths = Vec::new();
-            let mut buf = [0u16; 32768];
             for i in 0..count {
+                let mut buf = vec![0u16; DragQueryFileW(drop, i, std::ptr::null_mut(), 0) as usize + 1];
                 let n = DragQueryFileW(drop, i, buf.as_mut_ptr(), buf.len() as u32) as usize;
                 if n > 0 {
                     paths.push(String::from_utf16_lossy(&buf[..n]));
@@ -1878,5 +1925,41 @@ mod tests {
         assert_eq!(super::group(999), "999");
         assert_eq!(super::group(1000), "1,000");
         assert_eq!(super::group(1234567), "1,234,567");
+    }
+
+    fn scratch(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("renotepad-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name).to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn save_replaces_an_existing_file_and_leaves_no_temp() {
+        let path = scratch("replace.txt");
+        std::fs::write(&path, b"old content that is longer").unwrap();
+        super::write_file(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert!(!std::path::Path::new(&format!("{path}.{}.tmp", std::process::id())).exists());
+    }
+
+    #[test]
+    fn save_keeps_the_hidden_attribute() {
+        use std::os::windows::fs::MetadataExt;
+        const HIDDEN: u32 = 0x2;
+        let path = scratch("hidden.txt");
+        std::fs::write(&path, b"old").unwrap();
+        let mut perms_cmd = std::process::Command::new("attrib");
+        assert!(perms_cmd.args(["+h", &path]).status().unwrap().success());
+        super::write_file(&path, b"new").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert_ne!(std::fs::metadata(&path).unwrap().file_attributes() & HIDDEN, 0);
+    }
+
+    #[test]
+    fn save_creates_a_new_file() {
+        let path = scratch("fresh.txt");
+        let _ = std::fs::remove_file(&path);
+        super::write_file(&path, b"hello").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
     }
 }

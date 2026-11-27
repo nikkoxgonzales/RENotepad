@@ -1,6 +1,9 @@
 //! RENotepad (RE:Notepad) by Nikko Gonzales: Windows 10 Notepad, reverse-engineered
 //! and rebuilt in Rust, with the Windows 11 look. Dark by default.
 #![windows_subsystem = "windows"]
+// A big array in a window procedure is reserved on every (re-entrant) call; one
+// 64 KB buffer in wnd_proc turned a short recursion into a stack overflow.
+#![warn(clippy::large_stack_arrays)]
 
 mod app;
 mod chrome;

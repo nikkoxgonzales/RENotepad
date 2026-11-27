@@ -72,7 +72,7 @@ pub fn find(text: &[u16], pat: &[u16], sel: (usize, usize), down: bool, match_ca
             return Some(Hit { start: s, len: l, wrapped: false });
         }
         if wrap {
-            let from = sel_start.saturating_sub(pat.len());
+            let from = sel_start.min(text.len()).saturating_sub(pat.len());
             if let Some((s, l)) = nls_find(&text[from..], pat, true, match_case) {
                 return Some(Hit { start: from + s, len: l, wrapped: true });
             }
