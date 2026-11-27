@@ -2,6 +2,10 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-28 — 0.7.3:
+  - The folder pane button at the left of the menu bar now hides when no
+    folder is open and the tab has no saved file. A click there could only ask
+    for a folder, which File › Open folder already does.
 - 2026-11-28 — 0.7.2:
   - Faster: a 5 MB file opens about 1.5x faster, the app starts about 10%
     faster, and a Markdown preview with a large picture shows about 2.6x faster.
