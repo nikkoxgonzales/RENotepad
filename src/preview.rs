@@ -140,6 +140,11 @@ mod tests {
     use super::*;
     use windows_sys::Win32::Foundation::LRESULT;
 
+    /// RichEdit controls made on 2 test threads at once lose link clicks and
+    /// sometimes crash. The app makes them on its UI thread only. Each test
+    /// that makes one holds this lock.
+    static RICHEDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn plain_text(h: HWND) -> String {
         let n = unsafe { GetWindowTextLengthW(h) };
         let mut buf = vec![0u16; n as usize + 1];
@@ -151,6 +156,7 @@ mod tests {
     /// link's hidden URL all come through.
     #[test]
     fn rendered_markdown_loads_in_richedit() {
+        let _one = RICHEDIT.lock().unwrap_or_else(|e| e.into_inner());
         let class = wide("STATIC");
         let null = std::ptr::null_mut();
         let parent = unsafe { CreateWindowExW(0, class.as_ptr(), std::ptr::null(), WS_POPUP, 0, 0, 600, 400, null, null, null, std::ptr::null()) };
@@ -182,6 +188,7 @@ mod tests {
     /// A mouse click on a link's text reaches the parent as that link's URL.
     #[test]
     fn clicking_a_link_reports_its_url() {
+        let _one = RICHEDIT.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let class = wide("RENotepadPreviewTest");
             let wc = WNDCLASSW { lpfnWndProc: Some(record_links), lpszClassName: class.as_ptr(), ..std::mem::zeroed() };
