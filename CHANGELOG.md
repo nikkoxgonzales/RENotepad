@@ -2,6 +2,14 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-27 — 0.6.0:
+  - **Folder pane:** a tree of one folder at the left of the window, off until
+    you turn it on (*File › Open folder*, *View › Folder pane*, the button at
+    the left of the menu bar, Ctrl+Shift+E, or a folder on the command line).
+    Open files as tabs, see changes on disk at once, and make, rename, delete
+    (to the Recycle Bin) or reveal files from the right-click menu.
+  - New screenshots.
+
 - 2026-11-27 — 0.5.1:
   - The Markdown preview and the status bar paint correctly when you make the
     window larger.

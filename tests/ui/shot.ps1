@@ -5,7 +5,8 @@
 # -File opens that file in the first tab (extra tabs are modified Untitled ones).
 # The picture is cropped to the visible window.
 # -Preview shows the Markdown preview of -File (a .md file).
-# Usage: pwsh tests/ui/shot.ps1 -Out shot.png [-Exe ...] [-Light] [-Tabs 3] [-Lines 60] [-Dialog save] [-File notes.txt [-Preview]]
+# -Pane shows the folder pane on the folder of -File, with its folders expanded.
+# Usage: pwsh tests/ui/shot.ps1 -Out shot.png [-Exe ...] [-Light] [-Tabs 3] [-Lines 60] [-Dialog save] [-File notes.txt [-Preview] [-Pane]]
 param(
   [Parameter(Mandatory)][string]$Out,
   [string]$Exe = (Join-Path $PSScriptRoot '..\..\target\debug\RENotepad.exe'),
@@ -14,7 +15,8 @@ param(
   [int]$Lines = 1,
   [ValidateSet('', 'save', 'goto', 'about')][string]$Dialog = '',
   [string]$File,
-  [switch]$Preview # show the Markdown preview of -File (a .md file)
+  [switch]$Preview, # show the Markdown preview of -File (a .md file)
+  [switch]$Pane # show the folder pane on the folder of -File
 )
 . "$PSScriptRoot\lib.ps1"
 
@@ -35,6 +37,21 @@ if ($File) {
   Type-Text ([Q]::VisibleEdit($main)) $text
 }
 if ($Preview) { Cmd $main 54 } # View > Markdown preview
+if ($Pane) {
+  Cmd $main 56; Start-Sleep -Milliseconds 800 # View > Folder pane: the root is the file's folder
+  Add-Type -Name TV -Namespace Shot -MemberDefinition '[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr p, IntPtr a, string c, string w);'
+  $tree = [Shot.TV]::FindWindowExW($main, [IntPtr]::Zero, 'SysTreeView32', $null)
+  # Expand each folder under the root: select it (TVM_SELECTITEM), then a posted Right arrow lists it.
+  $root = [Q]::SendMessageW($tree, 0x110A, [IntPtr]0, [IntPtr]::Zero)  # TVM_GETNEXTITEM, TVGN_ROOT
+  $c = [Q]::SendMessageW($tree, 0x110A, [IntPtr]4, $root)              # TVGN_CHILD
+  while ($c -ne [IntPtr]::Zero) {
+    [Q]::SendMessageW($tree, 0x110B, [IntPtr]9, $c) | Out-Null           # TVGN_CARET
+    [Q]::PostMessageW($tree, 0x100, [IntPtr]0x27, [IntPtr]1) | Out-Null; Start-Sleep -Milliseconds 400
+    $c = [Q]::SendMessageW($tree, 0x110A, [IntPtr]1, $c)               # TVGN_NEXT
+  }
+  [Q]::SendMessageW($tree, 0x110B, [IntPtr]9, [IntPtr]::Zero) | Out-Null # no selection: only the bold file stands out
+  Start-Sleep -Milliseconds 300
+}
 Start-Sleep -Milliseconds 300
 if (-not $Dialog) {
   Snap $main $Out

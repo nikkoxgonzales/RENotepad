@@ -176,9 +176,11 @@ Check 'a wide window shows it again' ([T]::Visible($tree)) $true
 $w0 = [T]::Width($tree)
 $y = 300
 $down = [IntPtr](($y -shl 16) -bor ($w0 + 2)); $move = [IntPtr](($y -shl 16) -bor ($w0 + 82))
-[Q]::PostMessageW($main, 0x201, [IntPtr]1, $down) | Out-Null; Start-Sleep -Milliseconds 150
-[Q]::PostMessageW($main, 0x200, [IntPtr]1, $move) | Out-Null; Start-Sleep -Milliseconds 150
-[Q]::PostMessageW($main, 0x202, [IntPtr]0, $move) | Out-Null; Start-Sleep -Milliseconds 300
+# Sent, not posted: the capture makes Windows add a move at the real pointer, which
+# must not come between them when the pointer rests over the window.
+[Q]::SendMessageW($main, 0x201, [IntPtr]1, $down) | Out-Null
+[Q]::SendMessageW($main, 0x200, [IntPtr]1, $move) | Out-Null
+[Q]::SendMessageW($main, 0x202, [IntPtr]0, $move) | Out-Null; Start-Sleep -Milliseconds 300
 $w1 = [T]::Width($tree)
 Check 'a splitter drag widens the pane' ($w1 -eq $w0 + 80) $true
 

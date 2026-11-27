@@ -29,7 +29,7 @@ Dark by default. No Copilot, no Bing, no sign-in, no telemetry. Just text.
 | Markdown | | formatting toolbar | read-only preview |
 | Folder pane | | | ✓ (off by default) |
 | Copilot, Bing search, sign-in | | ✓ | |
-| Size | built in | Store app | one exe, about 630 KB |
+| Size | built in | Store app | one exe, about 700 KB |
 
 RE:Notepad keeps what Windows 10's Notepad did and how it did it, and takes
 only the look from Windows 11.
@@ -83,6 +83,8 @@ what's in the editor, unsaved changes too. *Edit* or Esc goes back.
 The second addition, off until you turn it on: *File › Open folder*,
 *View › Folder pane*, the pane button at the left of the menu bar, or
 Ctrl+Shift+E. It shows one folder as a tree at the left of the window.
+
+![The folder pane next to a Markdown file](docs/screenshots/folder-pane.png)
 
 - Double-click a file, or press Enter, to open it in a tab. The file of the
   active tab shows in bold, and the tree follows you from tab to tab.
@@ -157,7 +159,7 @@ pixel by pixel, and rebuilt it by hand:
 - the 16 px text margin;
 - the rounded dialogs with the button in your accent color.
 
-It's all plain Win32 and GDI, so the whole app is a single exe of about 630 KB
+It's all plain Win32 and GDI, so the whole app is a single exe of about 700 KB
 that opens instantly.
 
 The **RE** stands for **r**everse **e**ngineering. The app itself is called
