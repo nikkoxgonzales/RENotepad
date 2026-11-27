@@ -1765,7 +1765,7 @@ fn escape(out: &mut String, s: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub const C: Colors = Colors {

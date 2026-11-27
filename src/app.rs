@@ -23,6 +23,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_ESCAPE, VK_LEFT, VK_RIGHT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, PathCompactPathExW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
+use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const APP_NAME: &str = "RENotepad";
@@ -1337,8 +1338,7 @@ impl App {
             }
             self.replace_sel(&text::timestamp(true));
         }
-        let wpath = wide(path);
-        unsafe { SHAddToRecentDocs(SHARD_PATHW as u32, wpath.as_ptr().cast()) };
+        add_to_shell_recent(path);
         settings::add_recent(path);
         self.update_title();
         self.invalidate_chrome();
@@ -1962,6 +1962,27 @@ pub fn group(n: usize) -> String {
 /// file's attributes, ACL and creation time. Falls back to writing in place, like
 /// Notepad, when the folder won't take the temp file or the swap fails (some
 /// network shares). Ceiling: the swap turns a hard-linked file into a separate copy.
+/// Tell the shell about an opened file (Recent items, the jump list's Recent
+/// category). The call takes about 26 ms at the first open of a run, so one
+/// worker thread makes the calls, in the order of the opens.
+/// Ceiling: a process that ends at once (/P prints and exits) can end before
+/// the worker, and then the shell does not get that file.
+fn add_to_shell_recent(path: &str) {
+    use std::sync::mpsc::{channel, Sender};
+    static WORKER: std::sync::OnceLock<Sender<Vec<u16>>> = std::sync::OnceLock::new();
+    let tx = WORKER.get_or_init(|| {
+        let (tx, rx) = channel::<Vec<u16>>();
+        std::thread::spawn(move || unsafe {
+            CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+            for p in rx {
+                SHAddToRecentDocs(SHARD_PATHW as u32, p.as_ptr().cast());
+            }
+        });
+        tx
+    });
+    let _ = tx.send(wide(path));
+}
+
 fn write_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     if !std::path::Path::new(path).exists() {

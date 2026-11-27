@@ -17,6 +17,8 @@ mod highlight;
 mod jumplist;
 mod markdown;
 mod mdhtml;
+#[cfg(test)]
+mod perf;
 mod preview;
 mod print;
 mod settings;
@@ -46,6 +48,7 @@ pub fn muldiv(a: i32, b: i32, c: i32) -> i32 {
     let r = if (p < 0) != (c < 0) { (p - half) / c as i64 } else { (p + half) / c as i64 };
     r as i32
 }
+
 
 fn main() {
     unsafe {

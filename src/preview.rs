@@ -196,14 +196,22 @@ pub fn render(h: HWND, md: &str, dir: Option<&Path>, toggled: &[u32]) {
     let width = text_width(h);
     let picture = |url: &str| load_picture(url, dir);
     let opts = markdown::Options { width, toggled_details: toggled, picture: &picture, code_char: code_char(h) };
-    let mut rtf = markdown::to_rtf(md, &c, &opts).into_bytes();
-    rtf.push(0);
+    let rtf = markdown::to_rtf(md, &c, &opts);
     unsafe {
         SetWindowLongPtrW(h, GWLP_USERDATA, width as isize);
+        SendMessageW(h, EM_SETBKGNDCOLOR, 0, bg as isize);
+    }
+    load_rtf(h, rtf);
+}
+
+/// Replace the control's content with `rtf`, at the same scroll position.
+pub(crate) fn load_rtf(h: HWND, rtf: String) {
+    let mut rtf = rtf.into_bytes();
+    rtf.push(0);
+    unsafe {
         let mut pos = [0i32; 2];
         SendMessageW(h, EM_GETSCROLLPOS, 0, pos.as_mut_ptr() as isize);
         SendMessageW(h, WM_SETREDRAW, 0, 0);
-        SendMessageW(h, EM_SETBKGNDCOLOR, 0, bg as isize);
         // The RTF is pure ASCII, so the code page does not matter.
         let st = SetTextEx { flags: 0, codepage: 0 };
         // A read-only RichEdit drops the pictures of RTF that it is given.
@@ -253,11 +261,7 @@ fn load_picture(url: &str, dir: Option<&Path>) -> Option<markdown::Picture> {
         None => {
             let v = std::fs::read(&full).ok().and_then(|b| {
                 let (png, w, h) = markdown::picture_info(&b)?;
-                let mut hex = String::with_capacity(b.len() * 2);
-                for x in &b {
-                    hex.push_str(&format!("{x:02x}"));
-                }
-                Some((png, w, h, std::rc::Rc::from(hex)))
+                Some((png, w, h, std::rc::Rc::from(to_hex(&b))))
             });
             CACHE.with(|c| c.borrow_mut().insert(full, (stamp, v.clone())));
             v
@@ -286,6 +290,17 @@ pub unsafe fn clicked_link(lparam: LPARAM) -> Option<String> {
     let n = SendMessageW(hdr.hwndFrom, EM_GETTEXTRANGE, 0, &mut tr as *mut TextRange as isize).max(0) as usize;
     let range = String::from_utf16_lossy(&buf[..n.min(len)]);
     markdown::link_target(&range).map(str::to_string)
+}
+
+/// The bytes as lowercase hex digits, as an RTF picture wants them.
+pub(crate) fn to_hex(b: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(b.len() * 2);
+    for &x in b {
+        hex.push(DIGITS[(x >> 4) as usize] as char);
+        hex.push(DIGITS[(x & 15) as usize] as char);
+    }
+    hex
 }
 
 #[cfg(test)]
@@ -350,7 +365,10 @@ mod tests {
         let null = std::ptr::null_mut();
         let parent = unsafe { CreateWindowExW(0, class.as_ptr(), std::ptr::null(), WS_POPUP, 0, 0, 600, 400, null, null, null, std::ptr::null()) };
         let h = create(parent, 1);
-        let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        // Written at run time, so the test exe also runs on a PC without the source tree.
+        let docs = std::env::temp_dir().join("renotepad-preview-test");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("icon.png"), include_bytes!("../docs/icon.png")).unwrap();
         render(h, "a ![Logo](icon.png) b", Some(&docs), &[]);
         let t = plain_text(h);
         unsafe { DestroyWindow(parent) };
@@ -378,5 +396,10 @@ mod tests {
             DestroyWindow(parent);
             assert_eq!(got, vec!["docs/other.md".to_string()]);
         }
+    }
+
+    #[test]
+    fn picture_bytes_become_lowercase_hex_pairs() {
+        assert_eq!(to_hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
     }
 }

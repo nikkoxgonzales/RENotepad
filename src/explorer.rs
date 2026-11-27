@@ -186,11 +186,6 @@ impl Explorer {
             let style = WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_EDITLABELS | TVS_FULLROWSELECT | TVS_TRACKSELECT | TVS_NOHSCROLL;
             let hwnd = CreateWindowExW(0, WC_TREEVIEWW, std::ptr::null(), style, 0, 0, 0, 0, parent, id as HMENU, crate::dialogs::hinstance(), std::ptr::null());
             SendMessageW(hwnd, TVM_SETEXTENDEDSTYLE, TVS_EX_DOUBLEBUFFER as usize, TVS_EX_DOUBLEBUFFER as isize);
-            // The shell's small system image list: real file type icons, shared, never destroyed by us.
-            let mut sfi: SHFILEINFOW = std::mem::zeroed();
-            let x = wide("x");
-            let list = SHGetFileInfoW(x.as_ptr(), FILE_ATTRIBUTE_NORMAL, &mut sfi, std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
-            SendMessageW(hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL as usize, list as isize);
             let mut e = Explorer { hwnd, parent, show_hidden, ..Explorer::empty() };
             e.set_dpi(dpi);
             e.apply_theme();
@@ -237,6 +232,7 @@ impl Explorer {
         }
         self.root = root.clone();
         let Some(root) = root else { return };
+        self.attach_icons();
         let name = root.file_name().map_or_else(|| root.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
         let id = self.insert(TVI_ROOT, Kind::Root, &name, root.clone());
         self.root_id = id;
@@ -246,6 +242,24 @@ impl Explorer {
         self.watch_stop = Some(stop.clone());
         let (hwnd, gen) = (self.parent as usize, self.gen);
         std::thread::spawn(move || watch(hwnd, gen, root, stop));
+    }
+
+    /// Give the tree the shell's small system image list (real file type icons,
+    /// shared, never destroyed by us). Only when a root first shows: getting the
+    /// list costs about 6 ms, and the pane is off at most starts.
+    fn attach_icons(&self) {
+        unsafe {
+            if SendMessageW(self.hwnd, TVM_GETIMAGELIST, TVSIL_NORMAL as usize, 0) != 0 {
+                return;
+            }
+            let mut sfi: SHFILEINFOW = std::mem::zeroed();
+            let x = wide("x");
+            let list = SHGetFileInfoW(x.as_ptr(), FILE_ATTRIBUTE_NORMAL, &mut sfi, std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
+            // A new image list can change the item height: keep the one set_dpi chose.
+            let height = SendMessageW(self.hwnd, TVM_GETITEMHEIGHT, 0, 0);
+            SendMessageW(self.hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL as usize, list as isize);
+            SendMessageW(self.hwnd, TVM_SETITEMHEIGHT, height as usize, 0);
+        }
     }
 
     // ------------------------------------------------------------ items
