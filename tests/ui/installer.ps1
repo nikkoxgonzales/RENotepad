@@ -2,7 +2,8 @@
 # uninstall. Runs only when RENotepad isn't installed for this user, so it never
 # touches a real install. Notepad's pins are imported from a made-up jump list
 # (RENOTEPAD_PINS_FROM / RENOTEPAD_PINS_TO), never the real ones.
-# - Setup imports the pins once; a reinstall doesn't offer it again.
+# - Setup imports the pins once; a reinstall doesn't offer it again, also after
+#   the user declined it.
 # - The Start menu shortcut and the RENotepad.txt ProgID carry the app ID.
 # - Uninstall removes the app and every registry entry Setup made.
 # HKCU\Software\RENotepad (the real settings) gets the import marker from Setup;
@@ -28,8 +29,8 @@ $dir = Join-Path ([IO.Path]::GetTempPath()) "renotepad-setup-$stamp"
 New-Item -ItemType Directory $dir | Out-Null
 $f1 = Join-Path $dir 'pin one.txt'; $f2 = Join-Path $dir 'pin two.md'; Set-Content $f1 x; Set-Content $f2 x
 
-function Install {
-  $p = Start-Process $Setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER', '/NORESTART' -PassThru -Wait
+function Install([string[]]$More = @()) {
+  $p = Start-Process $Setup -ArgumentList (@('/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER', '/NORESTART') + $More) -PassThru -Wait
   $p.ExitCode
 }
 
@@ -37,7 +38,11 @@ try {
   [Pins.L]::Pin($from, $f1); [Pins.L]::Pin($from, $f2)
   $env:RENOTEPAD_PINS_FROM = $from; $env:RENOTEPAD_PINS_TO = $to
   Remove-ItemProperty HKCU:\Software\RENotepad -Name fNotepadPinsImported -ErrorAction SilentlyContinue
-  Check 'install exit code' (Install) 0
+  Check 'declined install exit code' (Install '/MERGETASKS="!importpins"') 0
+  Check 'a declined import pins nothing' ([Pins.L]::Pinned($to).Count) 0
+  Check 'a declined import still writes the marker' ((Get-ItemProperty HKCU:\Software\RENotepad).fNotepadPinsImported) 1
+  Remove-ItemProperty HKCU:\Software\RENotepad -Name fNotepadPinsImported
+  Check 'install exit code' (Install '/MERGETASKS="importpins"') 0 # Setup reuses the declined choice otherwise
   Check 'setup imported the pins' (([Pins.L]::Pinned($to) | Split-Path -Leaf) -join ',') 'pin one.txt,pin two.md'
   Check 'import marker written' ((Get-ItemProperty HKCU:\Software\RENotepad).fNotepadPinsImported) 1
   $lnk = (New-Object -ComObject Shell.Application).Namespace((Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs')).ParseName('RENotepad.lnk')

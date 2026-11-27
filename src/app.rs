@@ -948,6 +948,8 @@ impl App {
     fn open_path(&mut self, path: &str, forced: Option<Encoding>) {
         let same = |d: &Doc| d.path.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(path));
         if let Some(i) = self.docs.iter().position(same) {
+            // Opened again, so it moves to the top of the recent files like a first open.
+            settings::add_recent(path);
             self.switch_to(i);
             if forced.is_some() && !self.modified() {
                 self.load(path, forced);
@@ -1405,9 +1407,16 @@ impl App {
 
     fn open_recent(&mut self, i: usize) {
         let Some(path) = settings::recent().get(i).cloned() else { return };
-        if !std::path::Path::new(&path).is_file() {
-            settings::remove_recent(&path);
-            self.error(&format!("Cannot find the {path} file.\n\nIt was removed from the recent files."));
+        let p = std::path::Path::new(&path);
+        if !p.is_file() {
+            // An unplugged drive or an offline share keeps its entry. Only a file
+            // missing from a folder that is there is removed.
+            if p.parent().is_some_and(|d| d.is_dir()) {
+                settings::remove_recent(&path);
+                self.error(&format!("Cannot find the {path} file.\n\nIt was removed from the recent files."));
+            } else {
+                self.error(&format!("Cannot find the {path} file."));
+            }
             return;
         }
         self.open_path(&path, None);

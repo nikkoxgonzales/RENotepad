@@ -112,8 +112,9 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 Root: HKA; Subkey: "Software\Classes\*\shell\RENotepad"; ValueType: string; ValueName: ""; ValueData: "Edit with {#AppName}"; Flags: uninsdeletekey; Tasks: editwith
 Root: HKA; Subkey: "Software\Classes\*\shell\RENotepad"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExe},0"; Tasks: editwith
 Root: HKA; Subkey: "Software\Classes\*\shell\RENotepad\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: editwith
-; Offered once: after that the box is gone, so an upgrade doesn't re-pin what you unpinned.
-Root: HKCU; Subkey: "Software\RENotepad"; ValueType: dword; ValueName: "fNotepadPinsImported"; ValueData: 1; Tasks: importpins
+; Offered once, checked or not: after that the box is gone, so an upgrade (also a
+; silent one, which takes the default tasks) doesn't pin what you declined or unpinned.
+Root: HKCU; Subkey: "Software\RENotepad"; ValueType: dword; ValueName: "fNotepadPinsImported"; ValueData: 1; Check: NotepadPinsNotImported
 
 [Run]
 ; Notepad's pins go to the user who ran Setup, also when it's elevated for all users.

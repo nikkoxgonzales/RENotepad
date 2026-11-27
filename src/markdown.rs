@@ -63,6 +63,11 @@ pub fn resolve(url: &str, doc_dir: Option<&Path>) -> Target {
     if path.is_empty() || !is_markdown(&path) {
         return Target::Nothing;
     }
+    // A UNC link (//host/a.md, \\host\a.md) would connect to that host and can
+    // send it the user's Windows credentials. A relative link in a file on a share still works.
+    if path.chars().take(2).filter(|&c| c == '/' || c == '\\').count() == 2 {
+        return Target::Nothing;
+    }
     let p = Path::new(&path);
     match doc_dir {
         _ if p.is_absolute() => Target::File(p.to_path_buf()),
@@ -183,7 +188,9 @@ impl Writer {
             let gap = format!("\\sa{GAP}\\");
             let para = &self.out[self.para_at..];
             if para.contains("\\highlight") {
-                if let Some(i) = para.find(&gap) {
+                // Only in the properties (up to the first space), never in the text.
+                let props = &para[..para.find(' ').unwrap_or(para.len())];
+                if let Some(i) = props.find(&gap) {
                     let i = self.para_at + i;
                     self.out.replace_range(i..i + gap.len() - 1, "\\sa0");
                     self.out.push_str(&format!("\\pard\\plain\\fs2\\sa{}\\par\n", GAP - 20));
@@ -605,6 +612,21 @@ mod tests {
     fn relative_markdown_links_resolve_against_the_file() {
         assert_eq!(resolve("docs/My%20Notes.md#top", Some(Path::new(r"C:\repo"))), Target::File(PathBuf::from(r"C:\repo\docs/My Notes.md")));
         assert_eq!(resolve("C:/x/y.md", None), Target::File(PathBuf::from("C:/x/y.md")));
+    }
+
+    #[test]
+    fn unc_links_do_nothing() {
+        for url in ["//host/share/a.md", r"\\host\share\a.md", "%5C%5Chost/a.md", r"/\host/a.md"] {
+            assert_eq!(resolve(url, Some(Path::new(r"C:\d"))), Target::Nothing, "{url}");
+        }
+        assert_eq!(resolve("a.md", Some(Path::new(r"\\host\share"))), Target::File(PathBuf::from(r"\\host\share\a.md")));
+    }
+
+    #[test]
+    fn gap_text_in_a_highlighted_paragraph_stays_as_written() {
+        // The source text \sa160\ is escaped to \\sa160\\ and must stay so.
+        let r = rtf(r"# `x` \sa160\ y");
+        assert!(r.contains(r"\\sa160\\ y"), "{r}");
     }
 
     #[test]

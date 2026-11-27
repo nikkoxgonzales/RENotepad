@@ -3,7 +3,9 @@
 # - The first start adds the list's recent files below RENotepad's own entry,
 #   and skips a file that no longer exists. A second start imports nothing.
 # - Opening a file puts it on top. A recent entry opens from the menu command.
-# - A recent entry for a missing file is removed when picked. Clear empties the list.
+# - A recent entry for a missing file is removed when picked, but not when its
+#   folder is missing too (an unplugged drive). Reopening an open file puts it
+#   on top. Clear empties the list.
 # Usage: pwsh tests/ui/recent.ps1 [-Exe ...]
 param([string]$Exe = (Join-Path $PSScriptRoot '..\..\target\debug\RENotepad.exe'))
 . "$PSScriptRoot\lib.ps1"
@@ -63,7 +65,18 @@ try {
   Check 'missing file is removed when picked' ((Recent) -join ',') $own
   Stop-Process -Id $p.Id -Force; Start-Sleep -Milliseconds 300
 
-  $p, $main = Start-App
+  $p, $main = Start-App @("`"$a`"")
+  Start-Sleep -Milliseconds 500
+  Set-Recent @($own, $a)
+  Cmd $main 101 # IDM_RECENT + 1: the file this window already shows
+  Check 'reopening an open file puts it on top' ((Recent) -join ',') "$a,$own"
+
+  $offline = Join-Path $dir 'no-such-folder\c.txt' # like an unplugged drive or an offline share
+  Set-Recent @($offline, $own)
+  Cmd $main 100 # opens the error box
+  Start-Sleep -Milliseconds 500
+  Check 'a file in a missing folder keeps its entry' ((Recent) -join ',') "$offline,$own"
+
   Cmd $main 53 # IDM_CLEAR_RECENT
   Check 'clear empties the list' (Recent).Count 0
 } finally {
