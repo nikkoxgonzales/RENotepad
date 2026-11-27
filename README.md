@@ -85,7 +85,8 @@ what's in the editor, unsaved changes too. *Edit* or Esc goes back.
 ### Folder pane
 
 The second addition, off until you turn it on: *File › Open folder*,
-*View › Folder pane*, the pane button at the left of the menu bar, or
+*View › Folder pane*, the pane button at the left of the menu bar (it shows once a file or
+folder is open), or
 Ctrl+Shift+E. It shows one folder as a tree at the left of the window.
 
 ![The folder pane next to a Markdown file](docs/screenshots/folder-pane.png)

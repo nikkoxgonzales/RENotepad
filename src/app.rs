@@ -699,7 +699,10 @@ impl App {
         self.chrome.preview = md.then(|| !self.preview().is_null());
         // The setting, not the width: in a narrow window the pane is on but hidden,
         // and the button and the menu check must still offer to turn it off.
-        self.chrome.pane_shown = self.pane_on();
+        // No root and an untitled tab: the button could only ask for a folder
+        // (File › Open folder does that), so it hides.
+        let has_file = self.docs.get(self.cur).is_some_and(|d| d.path.is_some());
+        self.chrome.pane = (self.explorer.root().is_some() || has_file).then(|| self.pane_on());
         self.chrome.layout(w, self.docs.len(), self.cur)
     }
 
