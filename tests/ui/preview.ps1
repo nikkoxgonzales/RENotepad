@@ -77,14 +77,14 @@ Cmd $main 44
 Cmd $main 40 # Zoom in
 Check 'the preview survives a zoom' ([Z.Kids]::Preview($main)) $pv
 
-# The link is the first line, at the 16 px text inset.
-$l = [IntPtr](((Px 26) -shl 16) -bor (Px 30))
+# The link is the first line, at the 32 px text inset.
+$l = [IntPtr](((Px 46) -shl 16) -bor (Px 44))
 [Q]::PostMessageW($pv, 0x201, [IntPtr]1, $l) | Out-Null; [Q]::PostMessageW($pv, 0x202, [IntPtr]0, $l) | Out-Null; Start-Sleep -Milliseconds 700
 Check 'a relative Markdown link opens in a tab' (Title $main) 'other.md - RENotepad'
 Check 'the linked file opens in the editor' ([Z.Kids]::Preview($main) -eq [IntPtr]::Zero) $true
 Cmd $main 54
 $t = PreviewText ([Z.Kids]::Preview($main))
-Check 'front matter shows as its text above the heading' ($t -match '^\s*title: Front\s+Other\s*$') $true
+Check 'front matter shows as a key and value table above the heading' ($t -match '^\W*title\W+Front\W+Other\W*$') $true
 
 [Q]::PostMessageW($main, $WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
 Check 'the window closes without a prompt' ($p.WaitForExit(3000)) $true

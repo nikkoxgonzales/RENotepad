@@ -71,12 +71,16 @@ what's in the editor, unsaved changes too. *Edit* or Esc goes back.
 |---|---|
 | ![A Markdown file in the editor](docs/screenshots/markdown-source.png) | ![The same file in the preview](docs/screenshots/markdown-preview.png) |
 
-- Headings, bold, italic, strikethrough, lists, task lists, quotes, code,
-  tables and links.
+- It looks like GitHub's rendering, in GitHub's dark or light colors:
+  headings, lists, task lists, quotes, tables, code blocks with syntax colors,
+  alerts (`> [!NOTE]`), footnotes, `:emoji:` codes, and bare URLs as links.
+- Front matter at the top of the file shows as a table, as on GitHub.
+- The HTML that GitHub keeps works too: `<p align="center">`, `<img>`,
+  `<details>` (click the summary to open it), `<kbd>`, `<sub>`, `<sup>` and more.
 - Web links open in your browser. A link to another Markdown file opens it in
   a tab.
-- Raw HTML shows as text, and images as a placeholder: the preview never runs
-  anything or loads anything from the internet.
+- Images show from files on your PC. The preview never runs anything or loads
+  anything from the internet: a web image shows its alt text.
 
 ### Folder pane
 

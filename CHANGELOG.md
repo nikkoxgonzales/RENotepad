@@ -2,6 +2,19 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- Unreleased:
+  - The Markdown preview looks like GitHub's rendering: GitHub's colors, sizes
+    and spacing, underlined h1 and h2, quote bars, code blocks with syntax
+    colors, bordered tables, and nested lists numbered 1, i, a.
+  - Front matter shows as a table of keys and values, as on GitHub.
+  - Alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`),
+    footnotes, `:emoji:` codes and bare `www.` / `https://` / email links.
+  - The HTML that GitHub keeps: alignment, `<img>`, `<details>` that open on a
+    click, `<kbd>`, `<sub>`, `<sup>`, `<mark>` and more. Other tags go and
+    keep their text. `<script>` and `<style>` show as text.
+  - Images from files on your PC show in the preview. Web images show their
+    alt text: the preview loads nothing from the internet.
+
 - 2026-11-27 — 0.6.1:
   - Markdown preview: front matter at the top of a file (YAML between `---`
     lines, or TOML between `+++` lines) shows as a block of its own text. Before,

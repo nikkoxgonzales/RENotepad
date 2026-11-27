@@ -85,6 +85,10 @@ const PANE_MIN: i32 = 160;
 const PANE_HIDE_BELOW: i32 = 520;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
 const EDIT_PAD: i32 = 16;
+/// The padding around GitHub's rendered Markdown.
+const PREVIEW_PAD: i32 = 32;
+/// Renders the preview again after its width stops changing.
+const PREVIEW_TIMER: usize = 7;
 
 // Edit control extensions (Windows 10 1809+, commctrl.h ECM_FIRST = 0x1500).
 const EM_SETEXTENDEDSTYLE: u32 = 0x150A;
@@ -129,6 +133,8 @@ struct Doc {
     path: Option<String>,
     encoding: Encoding,
     zoom: i32,
+    /// The preview's `<details>` blocks that the user opened.
+    details: Vec<u32>,
 }
 
 /// Menu-bar keyboard/mouse navigation while a popup is open. Written by the
@@ -579,6 +585,9 @@ impl App {
                 // without NOCOPYBITS the old wrap stays on screen while the user drags.
                 SetWindowPos(p, std::ptr::null_mut(), left, top, (rc.right - left).max(0), height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
                 self.pad_edit(p);
+                if preview::width_changed(p) {
+                    SetTimer(self.hwnd, PREVIEW_TIMER, 150, None);
+                }
             }
             MoveWindow(self.status.hwnd, 0, rc.bottom - sh, rc.right, sh, 1);
             ShowWindow(self.status.hwnd, if self.settings.status_bar { SW_SHOWNA } else { SW_HIDE });
@@ -668,7 +677,7 @@ impl App {
         unsafe {
             let mut rc: RECT = std::mem::zeroed();
             GetClientRect(edit, &mut rc);
-            let pad = self.s(EDIT_PAD);
+            let pad = self.s(if self.docs.iter().any(|d| d.preview == edit) { PREVIEW_PAD } else { EDIT_PAD });
             rc.left += pad;
             rc.top += pad;
             rc.right = (rc.right - pad).max(rc.left + 1);
@@ -885,7 +894,7 @@ impl App {
 
     fn new_tab(&mut self) {
         let edit = self.make_edit(&[], (0, 0), false, 100);
-        self.docs.push(Doc { edit, preview: std::ptr::null_mut(), encoding: Encoding::Utf8, path: None, zoom: 100 });
+        self.docs.push(Doc { edit, preview: std::ptr::null_mut(), encoding: Encoding::Utf8, path: None, zoom: 100, details: Vec::new() });
         self.switch_to(self.docs.len() - 1);
     }
 
@@ -997,9 +1006,11 @@ impl App {
                 if zoom != 100 {
                     SendMessageW(p, EM_SETZOOM, zoom as usize, 100);
                 }
-                preview::render(p, &String::from_utf16_lossy(&get_edit_text(self.edit())));
                 SetWindowPos(self.status.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 self.doc_mut().preview = p;
+                // Laid out first: the render fits the boxes and tables to the width.
+                self.layout();
+                self.render_preview(self.cur);
             } else {
                 // Cleared first: destroying the focused preview sends WM_SETFOCUS, which focuses view().
                 let p = std::mem::replace(&mut self.doc_mut().preview, std::ptr::null_mut());
@@ -1007,6 +1018,15 @@ impl App {
             }
         }
         self.switch_to(self.cur);
+    }
+
+    /// Show tab `i`'s text in its preview, at the preview's width.
+    fn render_preview(&self, i: usize) {
+        let d = &self.docs[i];
+        if !d.preview.is_null() {
+            let dir = d.path.as_deref().and_then(|p| std::path::Path::new(p).parent());
+            preview::render(d.preview, &String::from_utf16_lossy(&get_edit_text(d.edit)), dir, &d.details);
+        }
     }
 
     /// A link clicked in the preview: web links go to the browser, Markdown files open in a tab.
@@ -1022,6 +1042,14 @@ impl App {
                 } else {
                     self.error(&format!("Cannot find the {p} file."));
                 }
+            }
+            markdown::Target::Details(n) => {
+                let d = self.doc_mut();
+                match d.details.iter().position(|&k| k == n) {
+                    Some(k) => drop(d.details.remove(k)),
+                    None => d.details.push(n),
+                }
+                self.render_preview(self.cur);
             }
             markdown::Target::Nothing => {}
         }
@@ -1533,6 +1561,9 @@ impl App {
         if !p.is_null() {
             unsafe { SendMessageW(p, EM_SETZOOM, z as usize, 100) };
             self.pad_edit(p);
+            if preview::width_changed(p) {
+                self.render_preview(self.cur);
+            }
         }
         self.fit_scrollbars();
         self.update_status();
@@ -1598,11 +1629,11 @@ impl App {
         theme::set_app_dark(self.settings.dark);
         theme::apply_window(self.hwnd);
         self.explorer.apply_theme();
-        for d in &self.docs {
+        for (i, d) in self.docs.iter().enumerate() {
             theme::apply_control(d.edit, "DarkMode_Explorer");
             if !d.preview.is_null() {
                 theme::apply_control(d.preview, "DarkMode_Explorer");
-                preview::render(d.preview, &String::from_utf16_lossy(&get_edit_text(d.edit)));
+                self.render_preview(i);
             }
         }
         unsafe {
@@ -2186,6 +2217,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             a.paint_splitter(hdc);
             a.paint_chrome(hdc);
             EndPaint(hwnd, &ps);
+            0
+        }
+        WM_TIMER if wparam == PREVIEW_TIMER => {
+            KillTimer(hwnd, PREVIEW_TIMER);
+            let p = a.preview();
+            if !p.is_null() && preview::width_changed(p) {
+                a.render_preview(a.cur);
+            }
             0
         }
         WM_ERASEBKGND => 1,
