@@ -9,7 +9,7 @@ use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
     FileOpenDialog, FileSaveDialog, IFileDialog, IFileDialogCustomize, IFileOpenDialog, IFileSaveDialog, IShellItem,
-    SHCreateItemFromParsingName, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
+    SHCreateItemFromParsingName, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
     SIGDN_FILESYSPATH,
 };
 
@@ -67,6 +67,22 @@ pub fn save_as(owner: *mut core::ffi::c_void, current: Option<&str>, enc: Encodi
         let path = result_path(&dlg.GetResult().ok()?)?;
         let sel = cust.GetSelectedControlItem(COMBO).ok().and_then(Encoding::from_index).unwrap_or(enc);
         Some(Picked { path, encoding: Some(sel) })
+    }
+}
+
+/// File › Open folder: the folder picker, starting in `start` when it exists.
+pub fn pick_folder(owner: *mut core::ffi::c_void, start: Option<&std::path::Path>) -> Option<String> {
+    unsafe {
+        let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let opts = dlg.GetOptions().ok()?;
+        dlg.SetOptions(opts | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM).ok()?;
+        if let Some(dir) = start.filter(|d| d.is_dir()) {
+            if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(dir.as_os_str()), None) {
+                let _ = dlg.SetFolder(&item);
+            }
+        }
+        dlg.Show(Some(HWND(owner))).ok()?;
+        result_path(&dlg.GetResult().ok()?)
     }
 }
 

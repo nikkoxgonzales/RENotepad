@@ -40,6 +40,13 @@ pub struct Settings {
     pub maximized: bool,
     /// Page margins in thousandths of an inch: left, top, right, bottom.
     pub margins: [i32; 4],
+    /// The folder pane shows (when its root exists).
+    pub folder_pane: bool,
+    /// Folder pane width at 96 DPI.
+    pub folder_width: i32,
+    pub folder_root: Option<String>,
+    /// The folder pane lists hidden and system items too.
+    pub show_hidden: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +69,10 @@ impl Default for Settings {
             window: None,
             maximized: false,
             margins: [750, 1000, 750, 1000],
+            folder_pane: false,
+            folder_width: 240,
+            folder_root: None,
+            show_hidden: false,
         }
     }
 }
@@ -179,6 +190,10 @@ impl Settings {
                 s.margins[i] = v;
             }
         }
+        s.folder_pane = flag("fFolderPane", s.folder_pane);
+        s.folder_width = k.dword("iFolderPaneWidth").filter(|v| (100..=4000).contains(v)).unwrap_or(s.folder_width);
+        s.folder_root = k.string("FolderRoot").filter(|r| !r.is_empty());
+        s.show_hidden = flag("fShowHidden", s.show_hidden);
         s
     }
 
@@ -208,6 +223,10 @@ impl Settings {
         for (i, name) in ["iMarginLeft", "iMarginTop", "iMarginRight", "iMarginBottom"].iter().enumerate() {
             k.set_dword(name, self.margins[i]);
         }
+        k.set_dword("fFolderPane", self.folder_pane as i32);
+        k.set_dword("iFolderPaneWidth", self.folder_width);
+        k.set_string("FolderRoot", self.folder_root.as_deref().unwrap_or(""));
+        k.set_dword("fShowHidden", self.show_hidden as i32);
     }
 }
 

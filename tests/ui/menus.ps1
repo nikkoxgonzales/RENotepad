@@ -22,10 +22,10 @@ function OpenMenuItems {
 function Key($vk) { [Q]::PostMessageW($main, 0x100, [IntPtr]$vk, [IntPtr]::Zero) | Out-Null }
 
 [Q]::PostMessageW($main, 0x112, [IntPtr]0xF100, [IntPtr][int][char]'f') | Out-Null # SC_KEYMENU, Alt+F
-Check 'Alt+F opens File' (OpenMenuItems) 16
+Check 'Alt+F opens File' (OpenMenuItems) 17
 Key 0x27; Check 'Right moves to Edit' (OpenMenuItems) 17
-Key 0x27; Check 'Right moves to View' (OpenMenuItems) 5
-Key 0x25; Key 0x25; Check 'Left twice is back on File' (OpenMenuItems) 16
+Key 0x27; Check 'Right moves to View' (OpenMenuItems) 6
+Key 0x25; Key 0x25; Check 'Left twice is back on File' (OpenMenuItems) 17
 Key 0x25; Check 'Left from File wraps to the gear' (OpenMenuItems) 8
 Key 0x1B; Check 'Escape closes' (OpenMenuItems) 'none'
 [Q]::PostMessageW($main, 0x1F, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null # WM_CANCELMODE, in case

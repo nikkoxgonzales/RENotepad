@@ -10,6 +10,7 @@ mod chrome;
 mod content_dialog;
 mod dialogs;
 mod encoding;
+mod explorer;
 mod filedlg;
 mod jumplist;
 mod markdown;

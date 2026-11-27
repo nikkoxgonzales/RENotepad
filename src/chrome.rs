@@ -44,6 +44,10 @@ const GLYPH_ADD: u16 = 0xE710;
 const GLYPH_SETTINGS: u16 = 0xE713;
 const GLYPH_PLAY: u16 = 0xE768;
 const GLYPH_EDIT: u16 = 0xE70F;
+const GLYPH_OPEN_PANE: u16 = 0xE8A0;
+const GLYPH_CLOSE_PANE: u16 = 0xE89F;
+/// The folder pane button at the left end of the menu bar.
+const PANE_W: i32 = 36;
 /// The Markdown preview button: its labels, and its gaps at 96 DPI.
 const PREVIEW_LABELS: [&str; 2] = ["Preview", "Edit"];
 const PREVIEW_PAD: i32 = 10;
@@ -58,6 +62,7 @@ pub enum Hit {
     NewTab,
     Menu(usize),
     Preview,
+    Pane,
     Min,
     Max,
     Close,
@@ -82,6 +87,8 @@ pub struct Layout {
     pub menus: [RECT; MENU_COUNT],
     /// The Markdown preview button, left of the gear, when it shows and fits.
     pub preview: Option<RECT>,
+    /// The folder pane button, left of File.
+    pub pane: RECT,
 }
 
 pub struct Chrome {
@@ -96,6 +103,8 @@ pub struct Chrome {
     preview_w: [i32; 2],
     /// The active tab is Markdown: Some(previewing) shows the preview button.
     pub preview: Option<bool>,
+    /// The folder pane shows (the pane button draws its "close" glyph).
+    pub pane_shown: bool,
     pub hover: Hit,
     pub pressed: Hit,
     pub open_menu: Option<usize>,
@@ -126,6 +135,7 @@ impl Chrome {
             menu_w: [0; 3],
             preview_w: [0; 2],
             preview: None,
+            pane_shown: false,
             hover: Hit::Nothing,
             pressed: Hit::Nothing,
             open_menu: None,
@@ -208,7 +218,8 @@ impl Chrome {
         let buttons = [0, 1, 2].map(|k| rect(buttons_left + k * s(BUTTON_W), 0, buttons_left + (k + 1) * s(BUTTON_W), s(BUTTON_H)));
         let (y0, y1) = (s(STRIP_H) + s(MENU_INSET), s(STRIP_H) + s(MENU_H) - s(MENU_INSET));
         let mut menus = [rect(0, 0, 0, 0); MENU_COUNT];
-        let mut x = s(MENU_X);
+        let pane = rect(s(MENU_X), y0, s(MENU_X) + s(PANE_W), y1);
+        let mut x = pane.right + s(MENU_GAP);
         for (m, text_w) in menus.iter_mut().zip(self.menu_w) {
             let w = text_w + 2 * s(MENU_PAD);
             *m = rect(x, y0, x + w, y1);
@@ -220,7 +231,7 @@ impl Chrome {
             let right = menus[SETTINGS_MENU].left - s(MENU_GAP);
             (right - w > menus[SETTINGS_MENU - 1].right + s(MENU_GAP)).then(|| rect(right - w, y0, right, y1))
         });
-        Layout { tabs, new_tab, buttons, menus, preview }
+        Layout { tabs, new_tab, buttons, menus, preview, pane }
     }
 
     fn tab_close_rect(&self, tab: &RECT) -> RECT {
@@ -249,6 +260,9 @@ impl Chrome {
         }
         if l.preview.is_some_and(|r| contains(&r, x, y)) {
             return Hit::Preview;
+        }
+        if contains(&l.pane, x, y) {
+            return Hit::Pane;
         }
         for (i, r) in l.menus.iter().enumerate() {
             if contains(r, x, y) {
@@ -312,6 +326,13 @@ impl Chrome {
                     text(mem, self.menu_font, MENU_LABELS[i], r, p.text, flags);
                 }
             }
+
+            if self.pressed == Hit::Pane {
+                theme::round_rect(mem, l.pane, self.s(4), false, p.pressed, p.surface);
+            } else if self.hover == Hit::Pane {
+                theme::round_rect(mem, l.pane, self.s(4), false, p.hover, p.surface);
+            }
+            glyph(mem, self.glyph_16, if self.pane_shown { GLYPH_CLOSE_PANE } else { GLYPH_OPEN_PANE }, &l.pane, p.text);
 
             if let (Some(r), Some(on)) = (l.preview, self.preview) {
                 if self.pressed == Hit::Preview {

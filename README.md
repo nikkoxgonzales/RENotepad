@@ -27,6 +27,7 @@ Dark by default. No Copilot, no Bing, no sign-in, no telemetry. Just text.
 | Dark mode | | ✓ | ✓ (default) |
 | Windows 11 look | | ✓ | ✓ |
 | Markdown | | formatting toolbar | read-only preview |
+| Folder pane | | | ✓ (off by default) |
 | Copilot, Bing search, sign-in | | ✓ | |
 | Size | built in | Store app | one exe, about 630 KB |
 
@@ -47,18 +48,18 @@ It's the classic Notepad, minus the extras.
     dimmed window, with the main button in your accent color.
 - **Tabs:** a dot on a tab means unsaved changes. Opening a file that's
   already open switches to its tab.
-- **File:** New tab, New window, Open, Recent files, Save, Save as (with an
+- **File:** New tab, New window, Open, Open folder, Recent files, Save, Save as (with an
   Encoding picker), Save all, Page setup, Print, Close tab, Close window.
 - **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous, Replace,
   Go to, Select all, Time/Date, Font.
-- **View:** Zoom, Status bar, Word wrap, Markdown preview.
+- **View:** Zoom, Status bar, Word wrap, Folder pane, Markdown preview.
 - **Status bar:** line and column, the character count ("5 of 120
   characters" while text is selected), then zoom, line endings and encoding.
 - **Encodings:** ANSI, UTF-8, UTF-8 with BOM, UTF-16 LE/BE, detected the way
   Windows 10 does it. Line endings are kept as they are, even mixed in one file.
 - **`.LOG` files** get a timestamp each time they're opened.
 - **Command line:** `RENotepad [/A|/W] [file]`, or `RENotepad /P file` to print
-  to the default printer.
+  to the default printer. `RENotepad C:\notes` opens a folder in the folder pane.
 
 ### Markdown preview
 
@@ -77,6 +78,25 @@ what's in the editor, unsaved changes too. *Edit* or Esc goes back.
 - Raw HTML shows as text, and images as a placeholder: the preview never runs
   anything or loads anything from the internet.
 
+### Folder pane
+
+The second addition, off until you turn it on: *File › Open folder*,
+*View › Folder pane*, the pane button at the left of the menu bar, or
+Ctrl+Shift+E. It shows one folder as a tree at the left of the window.
+
+- Double-click a file, or press Enter, to open it in a tab. The file of the
+  active tab shows in bold, and the tree follows you from tab to tab.
+- Folders load when you open them, and the tree keeps up with changes on disk
+  by itself. Hidden files stay hidden unless you ask (right-click › *Show
+  hidden items*).
+- Right-click for Open in new window, Reveal in File Explorer, Copy path,
+  New file, New folder, Rename (F2) and Delete (Del). Delete goes to the
+  Recycle Bin. A renamed file's open tab follows the new name, and a deleted
+  file's tab stays open so you can still save the text.
+- Drag a file from the pane onto the editor to open it. Drag the pane's edge
+  to resize it. Esc goes back to the editor. The pane, its folder and its
+  width come back next time.
+
 ### Keyboard shortcuts
 
 | Keys | Does |
@@ -92,6 +112,8 @@ what's in the editor, unsaved changes too. *Edit* or Esc goes back.
 | F5 | Insert time and date |
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+wheel | Zoom in / out / reset |
 | Ctrl+Shift+M | Markdown preview |
+| Ctrl+Shift+E | Folder pane: show, focus, hide |
+| F2, Del, F5 (in the folder pane) | Rename, Delete, Refresh |
 
 | Light mode | Windows 11 dialogs |
 |---|---|
@@ -231,6 +253,9 @@ RENotepad never downloads or installs anything by itself.
 - **Markdown preview:** images show as a placeholder, quotes have no side bar,
   code blocks are shaded behind the text only, and a very wide table runs past
   the window's right edge. Find works on the text, not on the preview.
+- **Folder pane:** a folder shows its first 2,000 items. Junctions and links
+  to folders show but don't open in place (right-click › *Set as root* opens
+  one). Folders aren't added to the jump list.
 - **Left out on purpose:** the formatting toolbar, Copilot, spell check and
   session restore.
 
@@ -258,6 +283,7 @@ ever taking your keyboard or covering your screen. See
 pwsh tests/ui/smoke.ps1      # find/replace/go to, dialogs, layout, tabs, settings
 pwsh tests/ui/menus.ps1      # menu bar keyboard navigation
 pwsh tests/ui/preview.ps1    # Markdown preview
+pwsh tests/ui/folderpane.ps1 # folder pane (shows a normal window: the rename needs focus)
 pwsh tests/ui/recent.ps1     # File > Recent files (on made-up jump lists only)
 pwsh tests/ui/scrollbars.ps1 # scrollbar fitting while the window resizes
 pwsh tests/ui/update.ps1     # update check (needs the internet)
@@ -280,6 +306,8 @@ pwsh tests/ui/shot.ps1 -Out shot.png  # a screenshot, without taking focus
   Notepad.
 - `src/markdown.rs`, `src/preview.rs`: the Markdown preview (Markdown to RTF,
   unit-tested; the read-only RichEdit that shows it).
+- `src/explorer.rs`: the folder pane (tree, folder listing and watcher
+  threads, file actions).
 - `src/encoding.rs`, `src/text.rs`: the pure rules, unit-tested.
 - `src/theme.rs`: dark and light palettes and drawing helpers.
 - `src/print.rs`, `src/filedlg.rs`, `src/settings.rs`.

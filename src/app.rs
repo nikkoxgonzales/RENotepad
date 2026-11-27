@@ -5,6 +5,7 @@
 use crate::chrome::{Chrome, Hit, Layout, TabView, MENU_COUNT, SETTINGS_MENU};
 use crate::dialogs::{self, Template, BUTTON, EDIT, LABEL_OFFSET};
 use crate::encoding::{self, Encoding};
+use crate::explorer::{self, Explorer};
 use crate::settings::{self, Settings};
 use crate::status::{self, Status};
 use crate::{filedlg, jumplist, markdown, muldiv, preview, print, text, theme, update, wide};
@@ -18,7 +19,7 @@ use windows_sys::Win32::UI::Controls::Dialogs::{ChooseFontW, CF_ENABLEHOOK, CF_I
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetCapture, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_DOWN,
+    EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_DOWN,
     VK_ESCAPE, VK_LEFT, VK_RIGHT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, PathCompactPathExW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
@@ -66,11 +67,22 @@ const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
 const IDM_CLEAR_RECENT: u16 = 53;
 const IDM_PREVIEW: u16 = 54;
+const IDM_OPEN_FOLDER: u16 = 55;
+/// View › Folder pane and the menu-bar button: show or hide.
+const IDM_FOLDER_PANE: u16 = 56;
+/// Ctrl+Shift+E: show the pane, then focus it, then hide it.
+const IDM_FOLDER_PANE_KEY: u16 = 57;
 /// File › Recent files: IDM_RECENT + index into settings::recent().
 const IDM_RECENT: u16 = 100;
 
 const EDIT_ID: usize = 15;
 const PREVIEW_ID: usize = 14;
+const TREE_ID: usize = 13;
+/// Folder pane geometry at 96 DPI: the splitter, the narrowest pane, and the
+/// window width under which the pane hides.
+const SPLIT_W: i32 = 5;
+const PANE_MIN: i32 = 160;
+const PANE_HIDE_BELOW: i32 = 520;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
 const EDIT_PAD: i32 = 16;
 
@@ -95,6 +107,8 @@ const MAX_FILE: u64 = 1 << 30;
 /// A clicked preview link, posted to ourselves: LPARAM = Box<String> (the URL).
 /// Opening a tab inside RichEdit's own click notification is not safe.
 const WM_OPEN_LINK: u32 = WM_APP + 3;
+/// A folder pane action, posted out of the tree's notification: LPARAM = Box<explorer::Action>.
+const WM_FOLDER_ACTION: u32 = WM_APP + 6;
 
 // Find / Replace dialog control ids.
 const IDC_FIND_TEXT: u16 = 1152;
@@ -177,6 +191,15 @@ pub struct App {
     hook: HWINEVENTHOOK,
     pub accel: HACCEL,
     pub global_accel: HACCEL,
+    explorer: Explorer,
+    /// Dragging the pane splitter: pointer x minus the pane width at the press.
+    split_drag: Option<i32>,
+    /// Dragging a file out of the folder pane.
+    drag_file: Option<std::path::PathBuf>,
+    /// The tab path the pane last showed in bold (None = show it again).
+    revealed: Option<Option<String>>,
+    /// The focus was in the folder pane when the window was deactivated.
+    tree_had_focus: bool,
 }
 
 static mut APP: *mut App = std::ptr::null_mut();
@@ -229,6 +252,11 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             hook: std::ptr::null_mut(),
             accel: accelerators(false),
             global_accel: accelerators(true),
+            explorer: Explorer::empty(),
+            split_drag: None,
+            drag_file: None,
+            revealed: None,
+            tree_had_focus: false,
         });
         APP = Box::into_raw(a);
         let a = app();
@@ -257,6 +285,14 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
         SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         DragAcceptFiles(hwnd, 1);
         a.status = Status::create(hwnd, a.dpi);
+        a.explorer = Explorer::create(hwnd, TREE_ID, a.dpi, a.settings.show_hidden);
+        if a.settings.folder_pane {
+            // The pane comes back only with a root that still exists.
+            match a.settings.folder_root.clone().map(std::path::PathBuf::from).filter(|r| r.is_dir()) {
+                Some(root) => a.explorer.set_root(Some(root)),
+                None => a.settings.folder_pane = false,
+            }
+        }
         a.make_font();
         a.new_tab();
         a.hook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, std::ptr::null_mut(), Some(caret_event), GetCurrentProcessId(), GetCurrentThreadId(), WINEVENT_OUTOFCONTEXT);
@@ -326,6 +362,7 @@ fn accelerators(global: bool) -> HACCEL {
             (c, b'H' as u16, IDM_REPLACE),
             (c, b'G' as u16, IDM_GOTO),
             (cs, b'M' as u16, IDM_PREVIEW),
+            (cs, b'E' as u16, IDM_FOLDER_PANE_KEY),
             (c, b'A' as u16, IDM_SELECT_ALL),
             (FVIRTKEY, VK_F5, IDM_TIME_DATE),
             (c, VK_OEM_PLUS, IDM_ZOOM_IN),
@@ -355,6 +392,7 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
         add(file, IDM_NEW, "&New tab\tCtrl+N");
         add(file, IDM_NEW_WINDOW, "New &window\tCtrl+Shift+N");
         add(file, IDM_OPEN, "&Open...\tCtrl+O");
+        add(file, IDM_OPEN_FOLDER, "Op&en folder...");
         let recent = CreatePopupMenu();
         let w = wide("Recent &files");
         AppendMenuW(file, MF_POPUP, recent as usize, w.as_ptr());
@@ -400,6 +438,7 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
         add(view, IDM_STATUS_BAR, "&Status bar");
         add(view, IDM_WRAP, "&Word wrap");
         sep(view);
+        add(view, IDM_FOLDER_PANE, "&Folder pane\tCtrl+Shift+E");
         add(view, IDM_PREVIEW, "&Markdown preview	Ctrl+Shift+M");
 
         let settings = CreatePopupMenu();
@@ -509,24 +548,82 @@ impl App {
             GetClientRect(self.hwnd, &mut rc);
             let top = self.chrome.top_height();
             let sh = if self.settings.status_bar { self.status.height() } else { 0 };
+            let height = (rc.bottom - sh - top).max(0);
+            let pane = self.pane_width();
+            let left = self.editor_left();
+            let tree = self.explorer.hwnd;
+            if pane > 0 {
+                MoveWindow(tree, 0, top, pane, height, 1);
+                ShowWindow(tree, SW_SHOWNA);
+                InvalidateRect(self.hwnd, &self.splitter_rect(), 0);
+            } else if GetWindowLongW(tree, GWL_STYLE) as u32 & WS_VISIBLE != 0 {
+                // The style, not IsWindowVisible: that is false while the main window is hidden.
+                let focus = GetFocus();
+                ShowWindow(tree, SW_HIDE);
+                if focus == tree || IsChild(tree, focus) != 0 {
+                    SetFocus(self.view());
+                }
+            }
             let edit = self.edit();
             if !edit.is_null() {
                 // An unneeded scrollbar is pushed past the window edge / under the status bar.
                 let (v, h) = self.bars;
                 let extra_w = if v { 0 } else { GetSystemMetricsForDpi(SM_CXVSCROLL, self.dpi) };
                 let extra_h = if h || self.settings.wrap { 0 } else { GetSystemMetricsForDpi(SM_CYHSCROLL, self.dpi) };
-                MoveWindow(edit, 0, top, rc.right + extra_w, (rc.bottom - sh - top).max(0) + extra_h, 1);
+                MoveWindow(edit, left, top, (rc.right - left).max(0) + extra_w, height + extra_h, 1);
                 self.pad_edit(edit);
             }
             let p = self.preview();
             if !p.is_null() {
                 // RichEdit re-wraps on a resize but repaints only the new strip;
                 // without NOCOPYBITS the old wrap stays on screen while the user drags.
-                SetWindowPos(p, std::ptr::null_mut(), 0, top, rc.right, (rc.bottom - sh - top).max(0), SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+                SetWindowPos(p, std::ptr::null_mut(), left, top, (rc.right - left).max(0), height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
                 self.pad_edit(p);
             }
             MoveWindow(self.status.hwnd, 0, rc.bottom - sh, rc.right, sh, 1);
             ShowWindow(self.status.hwnd, if self.settings.status_bar { SW_SHOWNA } else { SW_HIDE });
+        }
+    }
+
+    /// The pane shows: turned on, with a root, in a window wide enough.
+    fn pane_shown(&self) -> bool {
+        self.settings.folder_pane && self.explorer.root().is_some() && self.client_width() >= self.s(PANE_HIDE_BELOW)
+    }
+
+    /// Width of the folder pane in pixels, 0 when it is hidden.
+    fn pane_width(&self) -> i32 {
+        if !self.pane_shown() {
+            return 0;
+        }
+        let max = (self.client_width() * 2 / 5).max(self.s(PANE_MIN));
+        self.s(self.settings.folder_width).clamp(self.s(PANE_MIN), max)
+    }
+
+    /// Where the editor starts: right of the pane and its splitter.
+    fn editor_left(&self) -> i32 {
+        let w = self.pane_width();
+        if w > 0 { w + self.s(SPLIT_W) } else { 0 }
+    }
+
+    fn splitter_rect(&self) -> RECT {
+        let mut rc: RECT = unsafe { std::mem::zeroed() };
+        unsafe { GetClientRect(self.hwnd, &mut rc) };
+        let sh = if self.settings.status_bar { self.status.height() } else { 0 };
+        let w = self.pane_width();
+        RECT { left: w, top: self.chrome.top_height(), right: if w > 0 { w + self.s(SPLIT_W) } else { 0 }, bottom: rc.bottom - sh }
+    }
+
+    fn on_splitter(&self, x: i32, y: i32) -> bool {
+        let r = self.splitter_rect();
+        r.right > r.left && x >= r.left && x < r.right && y >= r.top && y < r.bottom
+    }
+
+    fn paint_splitter(&self, hdc: HDC) {
+        let r = self.splitter_rect();
+        if r.right > r.left {
+            let p = theme::palette();
+            theme::fill(hdc, &r, p.surface);
+            theme::fill(hdc, &RECT { left: r.right - 1, ..r }, p.line);
         }
     }
 
@@ -590,6 +687,7 @@ impl App {
         let w = self.client_width();
         let md = self.docs.get(self.cur).and_then(|d| d.path.as_deref()).is_some_and(markdown::is_markdown);
         self.chrome.preview = md.then(|| !self.preview().is_null());
+        self.chrome.pane_shown = self.pane_shown();
         self.chrome.layout(w, self.docs.len(), self.cur)
     }
 
@@ -635,6 +733,16 @@ impl App {
             dialogs::set_text(self.hwnd, &t);
             self.shown_title = t;
             self.invalidate_chrome();
+        }
+        self.follow_tab();
+    }
+
+    /// The folder pane shows the active tab's file in bold (only when it changed).
+    fn follow_tab(&mut self) {
+        let path = self.docs.get(self.cur).and_then(|d| d.path.clone());
+        if self.revealed.as_ref() != Some(&path) {
+            self.revealed = Some(path.clone());
+            self.explorer.reveal(path.as_deref().map(std::path::Path::new));
         }
     }
 
@@ -917,10 +1025,194 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ folder pane
+
+    /// Lay out again after the pane showed, hid or changed width.
+    fn relayout(&mut self) {
+        self.layout();
+        self.fit_scrollbars();
+        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
+    }
+
+    /// A new root for the pane (None = no folder).
+    fn set_root(&mut self, root: Option<std::path::PathBuf>) {
+        self.settings.folder_root = root.as_ref().map(|r| r.to_string_lossy().into_owned());
+        self.explorer.set_root(root);
+        self.revealed = None;
+        self.follow_tab();
+    }
+
+    /// Open a folder in the pane and show it, or close the folder and hide the pane.
+    fn set_folder(&mut self, root: Option<std::path::PathBuf>) {
+        self.settings.folder_pane = root.is_some();
+        self.set_root(root);
+        self.relayout();
+    }
+
+    /// File › Open folder...
+    fn open_folder(&mut self) {
+        let start = self.explorer.root().map(|r| r.to_path_buf()).or_else(|| self.doc().path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(|d| d.to_path_buf()));
+        if let Some(dir) = filedlg::pick_folder(self.hwnd, start.as_deref()) {
+            self.set_folder(Some(dir.into()));
+        }
+    }
+
+    /// Show or hide the pane. Showing it with no root roots it at the active
+    /// file's folder, else asks for a folder. false = the user cancelled.
+    fn show_pane(&mut self, on: bool) -> bool {
+        if on && self.explorer.root().is_none() {
+            let dir = self.doc().path.as_deref().and_then(|p| std::path::Path::new(p).parent()).filter(|d| d.is_dir()).map(|d| d.to_path_buf());
+            let Some(root) = dir.or_else(|| filedlg::pick_folder(self.hwnd, None).map(Into::into)) else { return false };
+            self.set_root(Some(root));
+        }
+        self.settings.folder_pane = on;
+        self.relayout();
+        true
+    }
+
+    fn pane_on(&self) -> bool {
+        self.settings.folder_pane && self.explorer.root().is_some()
+    }
+
+    fn focus_in_tree(&self) -> bool {
+        let f = unsafe { GetFocus() };
+        !f.is_null() && (f == self.explorer.hwnd || unsafe { IsChild(self.explorer.hwnd, f) } != 0)
+    }
+
+    /// Ctrl+Shift+E: hidden → show and focus; shown → focus; focused → hide.
+    fn folder_pane_key(&mut self) {
+        if !self.pane_on() {
+            if self.show_pane(true) && self.pane_shown() {
+                unsafe { SetFocus(self.explorer.hwnd) };
+            }
+        } else if self.focus_in_tree() {
+            self.show_pane(false);
+            unsafe { SetFocus(self.view()) };
+        } else if self.pane_shown() {
+            unsafe { SetFocus(self.explorer.hwnd) };
+        }
+    }
+
+    /// A command on the folder pane's selected item (or its root).
+    fn tree_command(&mut self, id: u16) {
+        use explorer::*;
+        if id == CMD_OPEN_FOLDER {
+            return self.open_folder();
+        }
+        let Some(t) = self.explorer.target() else { return };
+        let folder = if t.kind == Kind::File { t.path.parent().map(|p| p.to_path_buf()) } else { Some(t.path.clone()) };
+        match id {
+            CMD_OPEN if t.kind == Kind::File => self.open_path(&t.path.to_string_lossy(), None),
+            CMD_OPEN | CMD_TOGGLE => self.explorer.toggle(),
+            CMD_NEW_WINDOW => {
+                if let Ok(exe) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe).arg(&t.path).spawn();
+                }
+            }
+            CMD_REVEAL => reveal_in_explorer(&t.path),
+            CMD_COPY_PATH => copy_text(self.hwnd, &t.path.to_string_lossy()),
+            CMD_NEW_FILE | CMD_NEW_FOLDER => {
+                if let Some(dir) = folder {
+                    if let Err(e) = self.explorer.create_new(&dir, id == CMD_NEW_FOLDER) {
+                        self.error(&e);
+                    }
+                }
+            }
+            CMD_RENAME => self.explorer.start_rename(),
+            CMD_DELETE if t.kind != Kind::Root => self.delete_path(&t.path),
+            CMD_SET_ROOT if t.kind != Kind::File => self.set_root(Some(t.path)),
+            CMD_REFRESH => self.explorer.refresh_all(),
+            CMD_COLLAPSE_ALL => self.explorer.collapse_all(),
+            CMD_SHOW_HIDDEN => {
+                self.settings.show_hidden = !self.settings.show_hidden;
+                self.explorer.show_hidden = self.settings.show_hidden;
+                self.explorer.refresh_all();
+            }
+            CMD_CLOSE_FOLDER => self.set_folder(None),
+            _ => {}
+        }
+    }
+
+    /// Delete from the pane: to the Recycle Bin. A tab of a deleted file stays
+    /// open, marked modified, so its text can still be saved.
+    fn delete_path(&mut self, path: &std::path::Path) {
+        let inside = |d: &Doc| d.path.as_deref().is_some_and(|p| explorer::rel_components(path, std::path::Path::new(p)).is_some());
+        let unsaved = (0..self.docs.len()).any(|i| inside(&self.docs[i]) && self.doc_modified(i));
+        if unsaved {
+            let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+            let msg = format!("{name} is open with unsaved changes.\n\nMove it to the Recycle Bin anyway? Its tab stays open, so you can still save the text.");
+            if dialogs::message_box(self.hwnd, APP_NAME, &msg, &[("&Delete", IDYES), ("Cancel", IDCANCEL)]) != IDYES {
+                return;
+            }
+        }
+        if !explorer::recycle(self.hwnd, path) {
+            return;
+        }
+        self.explorer.forget(path);
+        for d in self.docs.iter().filter(|d| inside(d)) {
+            unsafe { SendMessageW(d.edit, EM_SETMODIFY, 1, 0) };
+        }
+        self.update_title();
+        self.invalidate_chrome();
+    }
+
+    /// Run a folder pane action that came out of a tree notification.
+    fn folder_action(&mut self, act: explorer::Action) {
+        use explorer::Action;
+        match act {
+            Action::Open(p) => self.open_path(&p.to_string_lossy(), None),
+            Action::Command(c) => self.tree_command(c),
+            Action::FocusEditor => unsafe {
+                SetFocus(self.view());
+            },
+            Action::Drag(p) => unsafe {
+                use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LBUTTON};
+                if GetKeyState(VK_LBUTTON as i32) < 0 {
+                    self.drag_file = Some(p);
+                    SetCapture(self.hwnd);
+                }
+            },
+            Action::Rename { id, name } => match self.explorer.rename(id, &name) {
+                Ok(Some((old, new))) => {
+                    let (old, new) = (old.to_string_lossy().into_owned(), new.to_string_lossy().into_owned());
+                    for d in &mut self.docs {
+                        if let Some(p) = d.path.as_mut() {
+                            if explorer::rel_components(std::path::Path::new(&old), std::path::Path::new(p.as_str())).is_some() {
+                                *p = format!("{new}{}", &p[old.len()..]);
+                            }
+                        }
+                    }
+                    self.revealed = None;
+                    self.update_title();
+                    self.invalidate_chrome();
+                }
+                Ok(None) => {}
+                Err(e) => self.error(&e),
+            },
+        }
+    }
+
+    /// Drop of a file dragged out of the pane: on the editor or the tab strip opens it.
+    fn end_file_drag(&mut self, x: i32, y: i32) {
+        let Some(path) = self.drag_file.take() else { return };
+        unsafe { ReleaseCapture() };
+        let mut rc: RECT = unsafe { std::mem::zeroed() };
+        unsafe { GetClientRect(self.hwnd, &mut rc) };
+        let on_target = x >= 0 && x < rc.right && y >= 0 && y < rc.bottom && (y < self.chrome.top_height() || x >= self.editor_left());
+        if on_target {
+            self.open_path(&path.to_string_lossy(), None);
+        }
+    }
+
     // ------------------------------------------------------------ files
 
     fn open_from_command_line(&mut self, arg: &str, forced: Option<Encoding>) {
         let mut path = std::path::absolute(arg).unwrap_or_else(|_| arg.into());
+        if path.is_dir() {
+            // A folder (Notepad fails on one) opens in the folder pane.
+            self.set_folder(Some(path));
+            return;
+        }
         if !path.exists() && path.extension().is_none() {
             path.set_extension("txt");
         }
@@ -1301,6 +1593,7 @@ impl App {
         self.settings.dark = !self.settings.dark;
         theme::set_app_dark(self.settings.dark);
         theme::apply_window(self.hwnd);
+        self.explorer.apply_theme();
         for d in &self.docs {
             theme::apply_control(d.edit, "DarkMode_Explorer");
             if !d.preview.is_null() {
@@ -1458,10 +1751,29 @@ impl App {
             ck(IDM_STATUS_BAR, self.settings.status_bar);
             ck(IDM_DARK, self.settings.dark);
             ck(IDM_AUTO_UPDATES, self.settings.check_updates);
+            ck(IDM_FOLDER_PANE, self.pane_on());
         }
     }
 
     fn command(&mut self, id: u16) {
+        if self.focus_in_tree() {
+            // Accelerators typed in the folder pane: F5 refreshes it, Ctrl+A selects
+            // the name being renamed. Neither reaches the hidden editor.
+            match id {
+                IDM_TIME_DATE => return self.explorer.refresh_all(),
+                IDM_SELECT_ALL => {
+                    let f = unsafe { GetFocus() };
+                    if f != self.explorer.hwnd {
+                        unsafe { SendMessageW(f, EM_SETSEL, 0, -1) };
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if (explorer::CMD_FIRST..=explorer::CMD_LAST).contains(&id) {
+            return self.tree_command(id);
+        }
         const EDITING_ONLY: [u16; 10] = [IDM_UNDO, IDM_CUT, IDM_PASTE, IDM_DELETE, IDM_FIND, IDM_FIND_NEXT, IDM_FIND_PREV, IDM_REPLACE, IDM_GOTO, IDM_TIME_DATE];
         if !self.preview().is_null() && EDITING_ONLY.contains(&id) {
             return; // an accelerator: the menu items are greyed out
@@ -1553,6 +1865,11 @@ impl App {
                 }
                 IDM_CLEAR_RECENT => settings::set_recent(&[]),
                 IDM_PREVIEW => self.set_preview(self.preview().is_null()),
+                IDM_OPEN_FOLDER => self.open_folder(),
+                IDM_FOLDER_PANE => {
+                    self.show_pane(!self.pane_on());
+                }
+                IDM_FOLDER_PANE_KEY => self.folder_pane_key(),
                 _ if (IDM_RECENT..IDM_RECENT + settings::RECENT_MAX as u16).contains(&id) => self.open_recent((id - IDM_RECENT) as usize),
                 _ => {}
             }
@@ -1584,7 +1901,7 @@ impl App {
 }
 
 /// 1234567 -> "1,234,567".
-fn group(n: usize) -> String {
+pub fn group(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -1724,8 +2041,21 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_MOUSEMOVE => {
             let (x, y) = point(lparam);
+            if let Some(off) = a.split_drag {
+                let max = (a.client_width() * 2 / 5).max(a.s(PANE_MIN));
+                let w = (x - off).clamp(a.s(PANE_MIN), max);
+                a.settings.folder_width = muldiv(w, 96, a.dpi as i32);
+                a.layout();
+                a.fit_scrollbars();
+                return 0;
+            }
+            if a.drag_file.is_some() {
+                let over_editor = y < a.chrome.top_height() || x >= a.editor_left();
+                SetCursor(LoadCursorW(std::ptr::null_mut(), if over_editor { IDC_HAND } else { IDC_NO }));
+                return 0;
+            }
             let h = a.hit(x, y);
-            a.set_hover(if matches!(h, Hit::Tab(_) | Hit::TabClose(_) | Hit::NewTab | Hit::Menu(_) | Hit::Preview) { h } else { Hit::Nothing });
+            a.set_hover(if matches!(h, Hit::Tab(_) | Hit::TabClose(_) | Hit::NewTab | Hit::Menu(_) | Hit::Preview | Hit::Pane) { h } else { Hit::Nothing });
             if !a.tracking_mouse {
                 a.tracking_mouse = true;
                 a.track_leave(false);
@@ -1739,9 +2069,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_LBUTTONDOWN => {
             let (x, y) = point(lparam);
+            if a.on_splitter(x, y) {
+                a.split_drag = Some(x - a.pane_width());
+                SetCapture(hwnd);
+                return 0;
+            }
             match a.hit(x, y) {
                 Hit::Tab(i) => a.switch_to(i),
-                h @ (Hit::TabClose(_) | Hit::NewTab | Hit::Preview) => {
+                h @ (Hit::TabClose(_) | Hit::NewTab | Hit::Preview | Hit::Pane) => {
                     a.chrome.pressed = h;
                     a.invalidate_chrome();
                     SetCapture(hwnd);
@@ -1752,10 +2087,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             0
         }
         WM_LBUTTONUP => {
+            let (x, y) = point(lparam);
+            if a.split_drag.take().is_some() {
+                ReleaseCapture();
+                return 0;
+            }
+            if a.drag_file.is_some() {
+                a.end_file_drag(x, y);
+                return 0;
+            }
             if GetCapture() == hwnd {
                 ReleaseCapture();
             }
-            let (x, y) = point(lparam);
             let pressed = std::mem::replace(&mut a.chrome.pressed, Hit::Nothing);
             if a.hit(x, y) == pressed {
                 match pressed {
@@ -1764,6 +2107,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     }
                     Hit::NewTab => a.new_tab(),
                     Hit::Preview => a.command(IDM_PREVIEW),
+                    Hit::Pane => a.command(IDM_FOLDER_PANE),
                     _ => {}
                 }
             }
@@ -1805,9 +2149,32 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             });
             0
         }
+        WM_CAPTURECHANGED if lparam as HWND != hwnd => {
+            a.split_drag = None;
+            a.drag_file = None;
+            0
+        }
+        WM_SETCURSOR if wparam as HWND == hwnd && (lparam & 0xFFFF) as u32 == HTCLIENT => {
+            let mut pt: POINT = std::mem::zeroed();
+            GetCursorPos(&mut pt);
+            ScreenToClient(hwnd, &mut pt);
+            if a.on_splitter(pt.x, pt.y) {
+                SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_SIZEWE));
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CONTEXTMENU if wparam as HWND == a.explorer.hwnd => {
+            let c = a.explorer.context_menu(lparam, a.settings.show_hidden);
+            if c != 0 {
+                a.tree_command(c);
+            }
+            0
+        }
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
+            a.paint_splitter(hdc);
             a.paint_chrome(hdc);
             EndPaint(hwnd, &ps);
             0
@@ -1825,7 +2192,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             a.window_active = (wparam & 0xFFFF) != WA_INACTIVE as usize;
             a.invalidate_chrome();
             if a.window_active {
-                SetFocus(a.view());
+                SetFocus(if a.tree_had_focus && a.pane_shown() { a.explorer.hwnd } else { a.view() });
+            } else {
+                a.tree_had_focus = a.focus_in_tree();
             }
             0
         }
@@ -1850,13 +2219,39 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 return 0;
             }
+            // A control's notification (the folder pane's rename box sends EN_CHANGE
+            // with id 1), not a command: id 1 would be New tab.
+            if !from.is_null() {
+                return 0;
+            }
             a.command(id);
             0
         }
         WM_NOTIFY => {
+            let hdr = &*(lparam as *const NMHDR);
+            if !hdr.hwndFrom.is_null() && hdr.hwndFrom == a.explorer.hwnd {
+                let (r, act) = a.explorer.notify(lparam);
+                if let Some(act) = act {
+                    PostMessageW(hwnd, WM_FOLDER_ACTION, 0, Box::into_raw(Box::new(act)) as isize);
+                }
+                return r;
+            }
             if let Some(url) = preview::clicked_link(lparam) {
                 PostMessageW(hwnd, WM_OPEN_LINK, 0, Box::into_raw(Box::new(url)) as isize);
             }
+            0
+        }
+        WM_FOLDER_ACTION => {
+            let act = *Box::from_raw(lparam as *mut explorer::Action);
+            a.folder_action(act);
+            0
+        }
+        explorer::WM_FOLDER_LISTED => {
+            a.explorer.listed(*Box::from_raw(lparam as *mut explorer::Listing));
+            0
+        }
+        explorer::WM_FOLDER_CHANGED => {
+            a.explorer.changed(*Box::from_raw(lparam as *mut explorer::Changes));
             0
         }
         WM_OPEN_LINK => {
@@ -1890,7 +2285,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             DragFinish(drop);
             for p in paths {
-                a.open_path(&p, None);
+                if std::path::Path::new(&p).is_dir() {
+                    a.set_folder(Some(p.into()));
+                } else {
+                    a.open_path(&p, None);
+                }
             }
             0
         }
@@ -1900,6 +2299,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
             a.chrome.set_dpi(a.dpi);
             a.status.set_dpi(a.dpi);
+            a.explorer.set_dpi(a.dpi);
             a.make_font();
             a.invalidate_chrome();
             0
