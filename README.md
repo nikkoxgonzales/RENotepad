@@ -111,6 +111,10 @@ RENotepad's own jump list works like Notepad's. Files you open show up under
 off; pinned files stay either way. To pin the file you have open, use
 *File › Pin to jump list*: it works whatever that setting is.
 
+*File › Recent files* lists the last 10 files you opened or saved. The first
+time it starts, RENotepad fills it with the files in Notepad's own *Recent*
+jump list that still exist. That happens once; Notepad's list is only read.
+
 ## What it does
 
 It's the classic Notepad, minus the extras.
@@ -128,8 +132,8 @@ It's the classic Notepad, minus the extras.
   - Ctrl+Tab / Ctrl+Shift+Tab (or Ctrl+PgDn / Ctrl+PgUp) switch between them.
   - A dot on a tab means unsaved changes.
   - Opening a file that's already open switches to its tab.
-- **File:** New tab, New window, Open, Save, Save as (with an Encoding picker),
-  Save all, Page setup, Print, Close tab, Close window.
+- **File:** New tab, New window, Open, Recent files, Save, Save as (with an
+  Encoding picker), Save all, Page setup, Print, Close tab, Close window.
 - **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous
   (F3 / Shift+F3), Replace, Go to, Select all, Time/Date (F5), Font.
 - **View:** Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0 / Ctrl+wheel), Status bar,
@@ -248,6 +252,11 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 ## Changelog
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
+
+- Unreleased:
+  - *File › Recent files*: the last 10 files, seeded once from Notepad's
+    recent files.
+  - Fixed a crash when typing with the cursor scrolled out of view (word wrap on).
 
 - 2026-10-13 — 0.4.0:
   - Brings over the files pinned to Notepad's taskbar jump list: offered by the

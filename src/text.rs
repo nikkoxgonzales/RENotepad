@@ -130,6 +130,8 @@ pub struct Args {
     pub print: bool,
     /// /ImportNotepadPins: copy Notepad's jump list pins, no window (RENotepad only).
     pub import_pins: bool,
+    /// /ImportNotepadRecent: add Notepad's recent files to ours, no window (RENotepad only).
+    pub import_recent: bool,
     /// /PinToJumpList file: pin the file to the jump list, no window (RENotepad only).
     pub pin: bool,
     pub file: Option<String>,
@@ -150,6 +152,11 @@ pub fn parse_args(cmdline: &str) -> Args {
     loop {
         if let Some(tail) = long_switch(rest, "/ImportNotepadPins") {
             args.import_pins = true;
+            rest = tail.trim_start();
+            continue;
+        }
+        if let Some(tail) = long_switch(rest, "/ImportNotepadRecent") {
+            args.import_recent = true;
             rest = tail.trim_start();
             continue;
         }
@@ -258,6 +265,8 @@ mod tests {
         let a = parse_args(r#""C:\x\RENotepad.exe" /ImportNotepadPins"#);
         assert!(a.import_pins && a.file.is_none());
         assert!(parse_args("np.exe /importnotepadpins").import_pins);
+        let a = parse_args(r#""C:\x\RENotepad.exe" /ImportNotepadRecent"#);
+        assert!(a.import_recent && !a.import_pins && a.file.is_none());
         // only as a whole word: a file name that starts with it stays a file
         let a = parse_args("np.exe /ImportNotepadPins.txt");
         assert!(!a.import_pins && a.file.as_deref() == Some("/ImportNotepadPins.txt"));

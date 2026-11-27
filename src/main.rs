@@ -53,6 +53,11 @@ fn main() {
             String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
         };
         let args = text::parse_args(&cmdline);
+        if args.import_recent {
+            let added = jumplist::import_notepad_recent();
+            CoUninitialize();
+            std::process::exit(added as i32);
+        }
         if args.import_pins || args.pin {
             let result = if args.pin { jumplist::pin_file(args.file.as_deref().unwrap_or("")) } else { jumplist::import_notepad_pins() };
             let code = result.map_or(jumplist::FAILED, |t| t.code());

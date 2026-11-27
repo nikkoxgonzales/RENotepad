@@ -1,14 +1,14 @@
 //! Taskbar jump list: RENotepad's own AppUserModelID, and bringing over the
-//! files pinned to Notepad's jump list.
+//! files pinned to Notepad's jump list and the files in its Recent list.
 //!
 //! Windows has no public API for pinning. The shell's own AutomaticDestinationList
 //! object (undocumented, the one Explorer uses) can read and pin; its layout
 //! here was probed on Windows 11 and is the one documented for Windows 10. A
 //! changed layout would crash, so importing and pinning run in a child
-//! process (`/ImportNotepadPins`, `/PinToJumpList file`), never in the editor,
-//! and only when asked.
+//! process (`/ImportNotepadPins`, `/ImportNotepadRecent`, `/PinToJumpList file`),
+//! never in the editor.
 
-use crate::wide;
+use crate::{settings, wide};
 use windows::core::{interface, IUnknown, IUnknown_Vtbl, Interface, BOOL, GUID, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Shell::Common::IObjectArray;
@@ -62,8 +62,11 @@ fn open(app_id: &str) -> windows::core::Result<IAutomaticDestinationList> {
     }
 }
 
-/// The paths pinned to `app_id`'s jump list, in order.
-fn pinned(app_id: &str) -> windows::core::Result<Vec<String>> {
+const PINNED: i32 = 0;
+const RECENT: i32 = 1;
+
+/// The paths in one list (PINNED or RECENT) of `app_id`'s jump list, in order.
+fn items(app_id: &str, kind: i32) -> windows::core::Result<Vec<String>> {
     let list = open(app_id)?;
     unsafe {
         let mut has = BOOL(0);
@@ -71,7 +74,7 @@ fn pinned(app_id: &str) -> windows::core::Result<Vec<String>> {
             return Ok(Vec::new());
         }
         let mut raw = std::ptr::null_mut();
-        list.get_list(0, 1000, 1, &IObjectArray::IID, &mut raw).ok()?;
+        list.get_list(kind, 1000, 1, &IObjectArray::IID, &mut raw).ok()?;
         let items = IObjectArray::from_raw(raw);
         let mut out = Vec::new();
         for i in 0..items.GetCount()? {
@@ -140,26 +143,45 @@ fn pin_into(list: &IAutomaticDestinationList, path: &str, tally: &mut Tally) -> 
 /// lists are only read. Test hooks: RENOTEPAD_PINS_FROM / RENOTEPAD_PINS_TO
 /// replace the source IDs and the target ID.
 pub fn import_notepad_pins() -> windows::core::Result<Tally> {
+    let target = target()?;
+    let mut tally = Tally::default();
+    for path in notepad_items(PINNED) {
+        pin_into(&target, &path, &mut tally)?;
+    }
+    Ok(tally)
+}
+
+/// One list of every Notepad's jump list, without duplicates, the Windows 11
+/// app's first. Test hook: RENOTEPAD_PINS_FROM replaces the source IDs.
+fn notepad_items(kind: i32) -> Vec<String> {
     let from = std::env::var("RENOTEPAD_PINS_FROM").ok();
     let sources: Vec<&str> = match &from {
         Some(f) => f.split(';').collect(),
         None => NOTEPAD_IDS.to_vec(),
     };
-    let target = target()?;
-    let mut seen = Vec::new();
-    let mut tally = Tally::default();
+    let mut out: Vec<String> = Vec::new();
     for source in sources {
         // A Notepad that was never installed or never used has no list.
-        let Ok(items) = pinned(source) else { continue };
-        for path in items {
-            let key = path.to_lowercase();
-            if !seen.contains(&key) {
-                seen.push(key);
-                pin_into(&target, &path, &mut tally)?;
+        let Ok(list) = items(source, kind) else { continue };
+        for path in list {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(&path)) {
+                out.push(path);
             }
         }
     }
-    Ok(tally)
+    out
+}
+
+/// Adds the files in Notepad's Recent jump list to File › Recent files, below
+/// RENotepad's own (`/ImportNotepadRecent`, run once at the first start). Files
+/// that no longer exist are skipped. Returns how many were added. Ceiling: the
+/// two Notepads' lists are joined one after the other, not by date.
+pub fn import_notepad_recent() -> u32 {
+    let found: Vec<String> = notepad_items(RECENT).into_iter().filter(|p| std::path::Path::new(p).is_file()).collect();
+    let before = settings::recent();
+    let after = settings::merge_recent(&before, &found);
+    settings::set_recent(&after);
+    (after.len() - before.len().min(after.len())) as u32
 }
 
 /// Pins one file to RENotepad's jump list (`/PinToJumpList file`). With
@@ -174,6 +196,7 @@ pub fn pin_file(path: &str) -> windows::core::Result<Tally> {
 /// What a WM_JUMPLIST_RESULT is about (its wParam).
 pub const IMPORT: usize = 0;
 pub const PIN: usize = 1;
+pub const IMPORT_RECENT: usize = 2;
 
 /// Runs `RENotepad.exe <args>` and posts WM_JUMPLIST_RESULT (wParam = `what`,
 /// lParam = exit code, FAILED if it crashed, hung or couldn't start).
@@ -203,6 +226,17 @@ fn run_child(args: &[String]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads only. Run on a PC that used Notepad:
+    /// `cargo test notepad_recent -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn notepad_recent_lists_paths() {
+        unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let list = notepad_items(RECENT);
+        println!("{} recent: {list:#?}", list.len());
+        assert!(list.iter().all(|p| p.contains('\\')));
+    }
 
     #[test]
     fn exit_code_round_trips() {

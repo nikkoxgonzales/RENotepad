@@ -2,6 +2,15 @@
 # class, drive them with window messages, capture them without activating.
 # Dot-source it: . "$PSScriptRoot\lib.ps1"
 
+# The app under test keeps its settings and recent files in a test key
+# (RENOTEPAD_KEY), never in HKCU\Software\RENotepad. Its first-start import of
+# Notepad's recent files reads a list that does not exist (RENOTEPAD_PINS_FROM).
+# A script that needs a list of its own sets RENOTEPAD_PINS_FROM again.
+$env:RENOTEPAD_KEY = 'Software\RENotepad.Test'
+$TestKey = "HKCU:\$env:RENOTEPAD_KEY"
+$env:RENOTEPAD_PINS_FROM = 'RENotepad.Test.NoSuchList'
+Remove-Item $TestKey -Recurse -ErrorAction SilentlyContinue
+
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System; using System.Text; using System.Runtime.InteropServices;

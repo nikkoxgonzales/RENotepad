@@ -34,6 +34,9 @@ namespace Pins {
       return r;
     }
     public static void Clear(string id) { Open(id).ClearList(1); }
+    // Adds a file to the list's Recent category, as opening it from the app would.
+    public static void Use(string id, string path) { object o; Marshal.ThrowExceptionForHR(SHCreateItemFromParsingName(path, IntPtr.Zero, ref I, out o)); Marshal.ThrowExceptionForHR(Open(id).AddUsagePoint(o)); }
+    public static void ClearRecent(string id) { Open(id).ClearList(0); }
     // The list's file name: CRC-64 (reflected, poly 0x92C64265D32139A4, init ~0)
     // of the upper-cased ID in UTF-16 LE, as lowercase hex.
     public static string FileName(string id) {

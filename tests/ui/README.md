@@ -19,8 +19,10 @@ every monitor doesn't work: DWM skips it and the capture comes out blank.
 | `update.ps1` | Needs the internet. The startup update check stays quiet (no dialog, a clickable status-bar notice); clicking the notice and *Settings › Check for updates* both answer with a dialog; a repo with no release says so. Uses `RENOTEPAD_UPDATE_REPO` to point the check at other repos. |
 | `pins.ps1` | Jump list pins, on made-up jump lists only (`RENOTEPAD_PINS_FROM` / `RENOTEPAD_PINS_TO`). The import brings files over in order and skips one that was since deleted; a second import adds nothing; the source list is left alone. `/PinToJumpList` pins a file, says so when it's already pinned, and won't pin a missing file. *File › Pin to jump list* pins the open file, and the gear menu import answers with a dialog. It cleans up both test lists. |
 | `installer.ps1` | The built setup (`dist\`), end to end: a silent per-user install imports pins once from a made-up list, a reinstall doesn't, the shortcut and ProgID carry the app ID, and uninstall leaves no trace in the registry. It refuses to run, and touches nothing, if RENotepad is installed for the user. It puts back the import marker in `HKCU\Software\RENotepad`. |
+| `recent.ps1` | *File › Recent files*: the first-start import from a made-up jump list (own entry stays on top, a deleted file is skipped, a second start imports nothing), opening from the list, a missing entry removed when picked, and Clear. |
+| `scrollbars.ps1` | Word wrap and a 1 px height sweep while typing: the app survives and the vertical bar shows exactly when needed. |
 | `jumplist.ps1` | Jump list helper for `pins.ps1` and `installer.ps1`: pin, read, clear, and the list file name. |
-| `lib.ps1` | Shared helpers: window lookup, message helpers, `Show-Ghost`, `Snap`. |
+| `lib.ps1` | Shared helpers: window lookup, message helpers, `Show-Ghost`, `Snap`. It also points the app at the test key `HKCU\Software\RENotepad.Test` (`RENOTEPAD_KEY`) and at a jump list that does not exist for the recent-files import (`RENOTEPAD_PINS_FROM`). |
 
 ```sh
 cargo build && pwsh tests/ui/smoke.ps1 && pwsh tests/ui/menus.ps1
@@ -31,11 +33,9 @@ Limits:
 - **Hover highlights can't be captured.** The app asks Windows to report when the
   mouse leaves; with no real cursor over the ghost, that report arrives at once
   and the highlight clears before the capture.
-- `smoke.ps1` closes the app normally, so it writes `HKCU\Software\RENotepad`.
-  It exports any existing key first, runs from default settings, and restores
-  the export in a `finally` block. A run killed outright (not Ctrl+C) skips
-  that; the export stays in `%TEMP%
-enotepad-smoke-settings.reg`.
+- The app under test writes only the test key `HKCU\Software\RENotepad.Test`.
+  `lib.ps1` deletes it when a script starts, and smoke, scrollbars and recent
+  delete it at the end. A run killed outright can leave it behind.
 - Windows 11 dialogs over a ghost are ghosts too: same opacity, click-through,
   never activated. So dialogs opened after `Show-Ghost` never appear on
   screen. The Find dialog (a classic one) still flashes for a moment.

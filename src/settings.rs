@@ -5,10 +5,19 @@
 use crate::wide;
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE,
-    REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+    REG_DWORD, REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 
+/// How many files File › Recent files keeps.
+pub const RECENT_MAX: usize = 10;
+
 const KEY: &str = r"Software\RENotepad";
+
+/// Test hook: RENOTEPAD_KEY replaces the key, so the UI tests never touch the
+/// real settings or recent files.
+fn key_path() -> String {
+    std::env::var("RENOTEPAD_KEY").unwrap_or_else(|_| KEY.to_string())
+}
 
 pub struct Settings {
     pub face: String,
@@ -63,7 +72,7 @@ impl Key {
     fn open(write: bool) -> Option<Key> {
         let mut hkey: HKEY = std::ptr::null_mut();
         let access = if write { KEY_READ | KEY_WRITE } else { KEY_READ };
-        let path = wide(KEY);
+        let path = wide(&key_path());
         // Reads only open the key; it is created on the first save.
         let rc = unsafe {
             if write {
@@ -95,6 +104,27 @@ impl Key {
         }
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Some(String::from_utf16_lossy(&buf[..len]))
+    }
+
+    fn multi_string(&self, name: &str) -> Vec<String> {
+        let n = wide(name);
+        let (mut size, mut ty) = (0u32, 0u32);
+        let query = |buf: *mut u8, size: &mut u32, ty: &mut u32| unsafe { RegQueryValueExW(self.0, n.as_ptr(), std::ptr::null(), ty, buf, size) };
+        if query(std::ptr::null_mut(), &mut size, &mut ty) != 0 || ty != REG_MULTI_SZ {
+            return Vec::new();
+        }
+        let mut buf = vec![0u16; size as usize / 2 + 1];
+        if query(buf.as_mut_ptr().cast(), &mut size, &mut ty) != 0 {
+            return Vec::new();
+        }
+        buf.split(|&c| c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()
+    }
+
+    fn set_multi_string(&self, name: &str, v: &[String]) {
+        let n = wide(name);
+        let mut data: Vec<u16> = v.iter().flat_map(|s| s.encode_utf16().chain(std::iter::once(0))).collect();
+        data.push(0);
+        unsafe { RegSetValueExW(self.0, n.as_ptr(), 0, REG_MULTI_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) };
     }
 
     fn set_dword(&self, name: &str, v: i32) {
@@ -178,5 +208,77 @@ impl Settings {
         for (i, name) in ["iMarginLeft", "iMarginTop", "iMarginRight", "iMarginBottom"].iter().enumerate() {
             k.set_dword(name, self.margins[i]);
         }
+    }
+}
+
+// File › Recent files lives in the registry, not in Settings: every window is its
+// own process, and each one saves Settings when it closes. Reading and writing
+// the list at each change keeps the windows from undoing each other.
+
+/// Recent files, most recent first.
+pub fn recent() -> Vec<String> {
+    Key::open(false).map(|k| k.multi_string("RecentFiles")).unwrap_or_default()
+}
+
+pub fn set_recent(list: &[String]) {
+    if let Some(k) = Key::open(true) {
+        k.set_multi_string("RecentFiles", &list[..list.len().min(RECENT_MAX)]);
+    }
+}
+
+/// Put `path` at the top of the recent files.
+pub fn add_recent(path: &str) {
+    set_recent(&merge_recent(&[path.to_string()], &recent()));
+}
+
+pub fn remove_recent(path: &str) {
+    let list: Vec<String> = recent().into_iter().filter(|p| !p.eq_ignore_ascii_case(path)).collect();
+    set_recent(&list);
+}
+
+/// Notepad's recent files were imported (or the import was started once).
+pub fn recent_imported() -> bool {
+    Key::open(false).and_then(|k| k.dword("fRecentImported")).is_some_and(|v| v != 0)
+}
+
+pub fn set_recent_imported() {
+    if let Some(k) = Key::open(true) {
+        k.set_dword("fRecentImported", 1);
+    }
+}
+
+/// `first`, then the entries of `then` that aren't already listed (paths compare
+/// case-insensitively, like NTFS), cut to RECENT_MAX.
+pub fn merge_recent(first: &[String], then: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in first.iter().chain(then) {
+        if out.len() < RECENT_MAX && !out.iter().any(|o| o.eq_ignore_ascii_case(p)) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn merge_puts_first_on_top_and_drops_duplicates() {
+        let got = merge_recent(&s(&[r"C:\b.txt"]), &s(&[r"C:\a.txt", r"c:\B.TXT", r"C:\c.txt"]));
+        assert_eq!(got, s(&[r"C:\b.txt", r"C:\a.txt", r"C:\c.txt"]));
+    }
+
+    #[test]
+    fn merge_keeps_at_most_recent_max() {
+        let many: Vec<String> = (0..25).map(|i| format!(r"C:\{i}.txt")).collect();
+        let got = merge_recent(&s(&[r"C:\new.txt"]), &many);
+        assert_eq!(got.len(), RECENT_MAX);
+        assert_eq!(got[0], r"C:\new.txt");
+        assert_eq!(got[1], r"C:\0.txt");
     }
 }

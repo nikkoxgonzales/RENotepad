@@ -5,7 +5,7 @@
 use crate::chrome::{Chrome, Hit, Layout, TabView, MENU_COUNT, SETTINGS_MENU};
 use crate::dialogs::{self, Template, BUTTON, EDIT, LABEL_OFFSET};
 use crate::encoding::{self, Encoding};
-use crate::settings::Settings;
+use crate::settings::{self, Settings};
 use crate::status::{self, Status};
 use crate::{filedlg, jumplist, muldiv, print, text, theme, update, wide};
 use windows_sys::Win32::Foundation::*;
@@ -21,7 +21,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_DOWN,
     VK_LEFT, VK_RIGHT,
 };
-use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, PathCompactPathExW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 pub const APP_NAME: &str = "RENotepad";
@@ -64,6 +64,9 @@ const IDM_CHECK_UPDATES: u16 = 49;
 const IDM_AUTO_UPDATES: u16 = 50;
 const IDM_IMPORT_PINS: u16 = 51;
 const IDM_PIN: u16 = 52;
+const IDM_CLEAR_RECENT: u16 = 53;
+/// File › Recent files: IDM_RECENT + index into settings::recent().
+const IDM_RECENT: u16 = 100;
 
 const EDIT_ID: usize = 15;
 /// Editor text inset at 96 DPI (Windows 11 Notepad: 16 px left and top).
@@ -154,6 +157,8 @@ pub struct App {
     pub settings: Settings,
     chrome: Chrome,
     menus: [HMENU; MENU_COUNT],
+    /// File › Recent files, filled each time it opens (init_menu).
+    recent_menu: HMENU,
     window_active: bool,
     tracking_mouse: bool,
     /// Scrollbars the active editor needs (vertical, horizontal); the rest are
@@ -194,6 +199,7 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
         };
         RegisterClassExW(&wc);
 
+        let (menus, recent_menu) = build_menus();
         let a = Box::new(App {
             hwnd: std::ptr::null_mut(),
             docs: Vec::new(),
@@ -205,7 +211,8 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             dpi: 96,
             settings,
             chrome: Chrome::new(96),
-            menus: build_menus(),
+            menus,
+            recent_menu,
             window_active: true,
             tracking_mouse: false,
             bars: (true, true),
@@ -271,6 +278,12 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
         if a.settings.check_updates {
             update::check_async(hwnd, false);
         }
+        // Once: Notepad's recent files seed File › Recent files. The flag is set
+        // before the run, so a child that fails or crashes is not run again.
+        if !settings::recent_imported() {
+            settings::set_recent_imported();
+            jumplist::run_async(hwnd, jumplist::IMPORT_RECENT, vec!["/ImportNotepadRecent".into()]);
+        }
         SetFocus(a.edit());
         Some(())
     }
@@ -318,7 +331,7 @@ fn accelerators(global: bool) -> HACCEL {
 }
 
 /// The popups behind File, Edit, View and the settings gear (sentence case, as in Windows 11).
-fn build_menus() -> [HMENU; MENU_COUNT] {
+fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
     unsafe {
         let add = |m: HMENU, id: u16, s: &str| {
             let w = wide(s);
@@ -332,6 +345,9 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(file, IDM_NEW, "&New tab\tCtrl+N");
         add(file, IDM_NEW_WINDOW, "New &window\tCtrl+Shift+N");
         add(file, IDM_OPEN, "&Open...\tCtrl+O");
+        let recent = CreatePopupMenu();
+        let w = wide("Recent &files");
+        AppendMenuW(file, MF_POPUP, recent as usize, w.as_ptr());
         add(file, IDM_SAVE, "&Save\tCtrl+S");
         add(file, IDM_SAVE_AS, "Save &as...\tCtrl+Shift+S");
         add(file, IDM_SAVE_ALL, "Save a&ll");
@@ -383,7 +399,7 @@ fn build_menus() -> [HMENU; MENU_COUNT] {
         add(settings, IDM_IMPORT_PINS, "&Import pinned files from Notepad");
         sep(settings);
         add(settings, IDM_ABOUT, &format!("&About {APP_NAME}"));
-        [file, edit, view, settings]
+        ([file, edit, view, settings], recent)
     }
 }
 
@@ -644,6 +660,9 @@ impl App {
     /// A finished update check. The startup check only speaks up, in the status
     /// bar, when there is something new; a check from the menu always answers.
     fn jumplist_result(&mut self, what: usize, result: Option<jumplist::Tally>) {
+        if what == jumplist::IMPORT_RECENT {
+            return; // silent: File › Recent files reads the registry when it opens
+        }
         if what == jumplist::PIN {
             self.set_message(match result {
                 None => "Couldn't pin it to the jump list",
@@ -902,6 +921,7 @@ impl App {
         }
         let wpath = wide(path);
         unsafe { SHAddToRecentDocs(SHARD_PATHW as u32, wpath.as_ptr().cast()) };
+        settings::add_recent(path);
         self.update_title();
         self.invalidate_chrome();
         self.set_message("");
@@ -929,6 +949,7 @@ impl App {
         let d = self.doc_mut();
         d.path = Some(path.to_string());
         d.encoding = enc;
+        settings::add_recent(path);
         unsafe { SendMessageW(self.edit(), EM_SETMODIFY, 0, 0) };
         self.update_title();
         self.invalidate_chrome();
@@ -1254,7 +1275,52 @@ impl App {
         }
     }
 
+    /// Fill File › Recent files from the registry; another window may have changed it.
+    fn fill_recent_menu(&self) {
+        unsafe {
+            let m = self.recent_menu;
+            while DeleteMenu(m, 0, MF_BYPOSITION) != 0 {}
+            let list = settings::recent();
+            if list.is_empty() {
+                let w = wide("No recent files");
+                AppendMenuW(m, MF_STRING | MF_GRAYED, 0, w.as_ptr());
+                return;
+            }
+            for (i, path) in list.iter().enumerate() {
+                // "&1" .. "&9", then "1&0"; a long path keeps its drive and file name.
+                let mut short = [0u16; 64];
+                let wpath = wide(path);
+                let shown = if PathCompactPathExW(short.as_mut_ptr(), wpath.as_ptr(), short.len() as u32, 0) != 0 {
+                    String::from_utf16_lossy(&short[..short.iter().position(|&c| c == 0).unwrap_or(0)])
+                } else {
+                    path.clone()
+                };
+                let n = i + 1;
+                let key = if n < 10 { format!("&{n}") } else { format!("{}&{}", n / 10, n % 10) };
+                let w = wide(&format!("{key}  {}", shown.replace('&', "&&")));
+                AppendMenuW(m, MF_STRING, (IDM_RECENT as usize) + i, w.as_ptr());
+            }
+            AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
+            let w = wide("&Clear recent files");
+            AppendMenuW(m, MF_STRING, IDM_CLEAR_RECENT as usize, w.as_ptr());
+        }
+    }
+
+    fn open_recent(&mut self, i: usize) {
+        let Some(path) = settings::recent().get(i).cloned() else { return };
+        if !std::path::Path::new(&path).is_file() {
+            settings::remove_recent(&path);
+            self.error(&format!("Cannot find the {path} file.\n\nIt was removed from the recent files."));
+            return;
+        }
+        self.open_path(&path, None);
+    }
+
     fn init_menu(&self, menu: HMENU) {
+        if menu == self.recent_menu {
+            self.fill_recent_menu();
+            return;
+        }
         unsafe {
             let e = self.edit();
             let (s, end) = self.sel();
@@ -1369,6 +1435,8 @@ impl App {
                         jumplist::run_async(self.hwnd, jumplist::PIN, vec!["/PinToJumpList".into(), path]);
                     }
                 }
+                IDM_CLEAR_RECENT => settings::set_recent(&[]),
+                _ if (IDM_RECENT..IDM_RECENT + settings::RECENT_MAX as u16).contains(&id) => self.open_recent((id - IDM_RECENT) as usize),
                 _ => {}
             }
         }

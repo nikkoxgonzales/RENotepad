@@ -8,11 +8,7 @@ Add-Type -Name Dpi -Namespace Z -MemberDefinition '[DllImport("user32.dll")] pub
 
 $File = Join-Path $env:TEMP 'renotepad-smoke.txt'
 [IO.File]::WriteAllText($File, "alpha beta`r`ngamma beta`r`ndelta`r`n")
-$Key = 'HKCU:\Software\RENotepad'
-# Run from default settings, and put back whatever was there afterwards.
-$Backup = Join-Path $env:TEMP 'renotepad-smoke-settings.reg'
-$hadKey = Test-Path $Key
-if ($hadKey) { reg export 'HKCU\Software\RENotepad' $Backup /y | Out-Null; Remove-Item $Key -Recurse }
+$Key = $TestKey
 $script:failed = $false
 try {
 
@@ -120,7 +116,6 @@ Check 'settings saved on close' (Test-Path $Key) $true
 } finally {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
   Remove-Item $Key -Recurse -ErrorAction SilentlyContinue
-  if ($hadKey) { reg import $Backup 2>&1 | Out-Null; Remove-Item $Backup }
   Remove-Item $File -ErrorAction SilentlyContinue
 }
 if ($script:failed) { exit 1 }
