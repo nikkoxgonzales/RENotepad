@@ -4,7 +4,8 @@
 # window, the way it looks on screen.
 # -File opens that file in the first tab (extra tabs are modified Untitled ones).
 # The picture is cropped to the visible window.
-# Usage: pwsh tests/ui/shot.ps1 -Out shot.png [-Exe ...] [-Light] [-Tabs 3] [-Lines 60] [-Dialog save] [-File notes.txt]
+# -Preview shows the Markdown preview of -File (a .md file).
+# Usage: pwsh tests/ui/shot.ps1 -Out shot.png [-Exe ...] [-Light] [-Tabs 3] [-Lines 60] [-Dialog save] [-File notes.txt [-Preview]]
 param(
   [Parameter(Mandatory)][string]$Out,
   [string]$Exe = (Join-Path $PSScriptRoot '..\..\target\debug\RENotepad.exe'),
@@ -12,7 +13,8 @@ param(
   [int]$Tabs = 2,
   [int]$Lines = 1,
   [ValidateSet('', 'save', 'goto', 'about')][string]$Dialog = '',
-  [string]$File
+  [string]$File,
+  [switch]$Preview # show the Markdown preview of -File (a .md file)
 )
 . "$PSScriptRoot\lib.ps1"
 
@@ -32,6 +34,7 @@ if ($File) {
   $text = (1..$Lines | ForEach-Object { if ($_ -eq 1) { 'This is RE:Notepad' } else { "line $_" } }) -join "`r`n"
   Type-Text ([Q]::VisibleEdit($main)) $text
 }
+if ($Preview) { Cmd $main 54 } # View > Markdown preview
 Start-Sleep -Milliseconds 300
 if (-not $Dialog) {
   Snap $main $Out

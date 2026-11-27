@@ -8,13 +8,94 @@
 Dark by default. No Copilot, no Bing, no sign-in, no telemetry. Just text.
 
 [**Download**](https://github.com/nikkoxgonzales/RENotepad/releases/latest) ·
+[Features](#features) ·
 [The story](#the-story) ·
 [Make it your default](#make-it-your-default) ·
-[Build from source](#build-from-source)
+[Build from source](#build-from-source) ·
+[Changelog](CHANGELOG.md)
 
 ![RE:Notepad in dark mode](docs/screenshots/dark.png)
 
 </div>
+
+## Why
+
+|  | Windows 10 Notepad | Windows 11 Notepad | RE:Notepad |
+|---|:---:|:---:|:---:|
+| Classic Notepad behavior (encodings, `.LOG`, line endings) | ✓ | mostly | ✓ |
+| Tabs | | ✓ | ✓ |
+| Dark mode | | ✓ | ✓ (default) |
+| Windows 11 look | | ✓ | ✓ |
+| Markdown | | formatting toolbar | read-only preview |
+| Copilot, Bing search, sign-in | | ✓ | |
+| Size | built in | Store app | one exe, about 630 KB |
+
+RE:Notepad keeps what Windows 10's Notepad did and how it did it, and takes
+only the look from Windows 11.
+
+## Features
+
+It's the classic Notepad, minus the extras.
+
+- **Look:**
+  - The Windows 11 style: icon and tabs in the title bar, a flat File / Edit /
+    View menu bar, a settings gear.
+  - Dark mode by default, light mode one click away.
+  - Text inset 16 px from the edges, and scrollbars only when there's
+    something to scroll.
+  - Prompts, Go to line and About are Windows 11 style dialogs over the
+    dimmed window, with the main button in your accent color.
+- **Tabs:** a dot on a tab means unsaved changes. Opening a file that's
+  already open switches to its tab.
+- **File:** New tab, New window, Open, Recent files, Save, Save as (with an
+  Encoding picker), Save all, Page setup, Print, Close tab, Close window.
+- **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous, Replace,
+  Go to, Select all, Time/Date, Font.
+- **View:** Zoom, Status bar, Word wrap, Markdown preview.
+- **Status bar:** line and column, the character count ("5 of 120
+  characters" while text is selected), then zoom, line endings and encoding.
+- **Encodings:** ANSI, UTF-8, UTF-8 with BOM, UTF-16 LE/BE, detected the way
+  Windows 10 does it. Line endings are kept as they are, even mixed in one file.
+- **`.LOG` files** get a timestamp each time they're opened.
+- **Command line:** `RENotepad [/A|/W] [file]`, or `RENotepad /P file` to print
+  to the default printer.
+
+### Markdown preview
+
+The one addition Windows 10 Notepad never had. A *Preview* button appears in
+the menu bar for `.md` files. It shows the file formatted and read-only, from
+what's in the editor, unsaved changes too. *Edit* or Esc goes back.
+
+| The file | The preview |
+|---|---|
+| ![A Markdown file in the editor](docs/screenshots/markdown-source.png) | ![The same file in the preview](docs/screenshots/markdown-preview.png) |
+
+- Headings, bold, italic, strikethrough, lists, task lists, quotes, code,
+  tables and links.
+- Web links open in your browser. A link to another Markdown file opens it in
+  a tab.
+- Raw HTML shows as text, and images as a placeholder: the preview never runs
+  anything or loads anything from the internet.
+
+### Keyboard shortcuts
+
+| Keys | Does |
+|---|---|
+| Ctrl+N, Ctrl+T | New tab |
+| Ctrl+Shift+N | New window |
+| Ctrl+W, Ctrl+F4, middle-click a tab | Close tab |
+| Ctrl+Shift+W | Close window |
+| Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PgDn / Ctrl+PgUp | Next / previous tab |
+| Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+P | Open, Save, Save as, Print |
+| Ctrl+F, Ctrl+H, Ctrl+G | Find, Replace, Go to |
+| F3 / Shift+F3 | Find next / previous |
+| F5 | Insert time and date |
+| Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+wheel | Zoom in / out / reset |
+| Ctrl+Shift+M | Markdown preview |
+
+| Light mode | Windows 11 dialogs |
+|---|---|
+| ![Light mode](docs/screenshots/light.png) | ![Save prompt](docs/screenshots/save-prompt.png) |
 
 ## The story
 
@@ -54,15 +135,11 @@ pixel by pixel, and rebuilt it by hand:
 - the 16 px text margin;
 - the rounded dialogs with the button in your accent color.
 
-It's all plain Win32 and GDI, so the whole app is a single exe of about 350 KB
+It's all plain Win32 and GDI, so the whole app is a single exe of about 630 KB
 that opens instantly.
 
 The **RE** stands for **r**everse **e**ngineering. The app itself is called
 **RENotepad**, because a colon can't go in a file name.
-
-| Light mode | Windows 11 dialogs |
-|---|---|
-| ![Light mode](docs/screenshots/light.png) | ![Save prompt](docs/screenshots/save-prompt.png) |
 
 ## Download
 
@@ -84,80 +161,38 @@ release has a `SHA256SUMS.txt` you can check the downloads against.
 
 Windows doesn't let any installer make itself the default app; you choose. After installing:
 
-1. **For all text files at once:** open *Settings › Apps › Default apps*,
-   search for **RENotepad**, and pick it for the file types you want
-   (`.txt`, `.log`, `.ini`, `.md`, `.json`, `.csv`…). The installer's last page
-   has a checkbox that opens this page for you.
-2. **For one file type:** right-click a file, then *Open with › Choose another
-   app*. Pick **RENotepad** and tick *Always*.
+- **For all text files at once:** open *Settings › Apps › Default apps*,
+  search for **RENotepad**, and pick it for the file types you want
+  (`.txt`, `.log`, `.ini`, `.md`, `.json`, `.csv`…). The installer's last page
+  has a checkbox that opens this page for you.
+- **For one file type:** right-click a file, then *Open with › Choose another
+  app*. Pick **RENotepad** and tick *Always*.
 
 The installer can also add **Edit with RENotepad** to every file's right-click
 menu. On Windows 11 it's under *Show more options*.
 
-### Bring your pinned files
+## Jump list and recent files
 
-The files you pinned to Notepad's taskbar jump list (right-click Notepad on the
-taskbar) can come along. The installer offers it the first time you install.
-Afterwards, *Settings › Import pinned files from Notepad* does it any time.
-It reads Windows 11's Notepad, and also Windows 10's classic Notepad, though
-that's untested so far. If Windows refuses, the import says so. Notepad keeps
-its own pins; RENotepad only reads them. Pins to files that no longer exist
-(moved or deleted since you pinned them) are skipped, and the import tells you
-how many.
+**Bring your pinned files.** The files you pinned to Notepad's taskbar jump
+list (right-click Notepad on the taskbar) can come along. The installer offers
+it the first time you install. Afterwards, *Settings › Import pinned files from
+Notepad* does it any time.
+- It reads Windows 11's Notepad, and also Windows 10's classic Notepad, though
+  that's untested so far.
+- Notepad keeps its own pins; RENotepad only reads them.
+- Pins to files that no longer exist (moved or deleted since you pinned them)
+  are skipped, and the import tells you how many. If Windows refuses, the
+  import says so.
 
-RENotepad's own jump list works like Notepad's. Files you open show up under
+**RENotepad's own jump list** works like Notepad's. Files you open show up under
 *Recent*, and you can pin any of them. Recent stays empty while Windows'
 "Show recently opened items in Start, Jump Lists, and File Explorer" setting is
 off; pinned files stay either way. To pin the file you have open, use
 *File › Pin to jump list*: it works whatever that setting is.
 
-*File › Recent files* lists the last 10 files you opened or saved. The first
+**File › Recent files** lists the last 10 files you opened or saved. The first
 time it starts, RENotepad fills it with the files in Notepad's own *Recent*
 jump list that still exist. That happens once; Notepad's list is only read.
-
-## What it does
-
-It's the classic Notepad, minus the extras.
-
-- **Look:**
-  - The Windows 11 style: icon and tabs in the title bar, a flat File / Edit /
-    View menu bar, a settings gear.
-  - Dark mode by default, light mode one click away.
-  - Text inset 16 px from the edges, and scrollbars only when there's
-    something to scroll.
-  - Prompts, Go to line and About are Windows 11 style dialogs over the
-    dimmed window, with the main button in your accent color.
-- **Tabs:**
-  - Ctrl+N or Ctrl+T opens one; Ctrl+W, middle-click or the × closes one.
-  - Ctrl+Tab / Ctrl+Shift+Tab (or Ctrl+PgDn / Ctrl+PgUp) switch between them.
-  - A dot on a tab means unsaved changes.
-  - Opening a file that's already open switches to its tab.
-- **File:** New tab, New window, Open, Recent files, Save, Save as (with an
-  Encoding picker), Save all, Page setup, Print, Close tab, Close window.
-- **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous
-  (F3 / Shift+F3), Replace, Go to, Select all, Time/Date (F5), Font.
-- **View:** Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0 / Ctrl+wheel), Status bar,
-  Word wrap, Markdown preview (Ctrl+Shift+M).
-- **Markdown preview**, the one addition Windows 10 Notepad never had:
-  - A *Preview* button appears in the menu bar for `.md` files. It shows the
-    file formatted, read-only, from what's in the editor (unsaved changes too).
-    *Edit* or Esc goes back.
-  - Headings, bold, italic, strikethrough, lists, task lists, quotes, code,
-    tables and links. Web links open in your browser; a link to another
-    Markdown file opens it in a tab.
-  - Raw HTML shows as text, and images as a placeholder: the preview never
-    runs anything or loads anything from the internet.
-- **Status bar:**
-  - Line and column, then the character count ("5 of 120 characters" while
-    text is selected).
-  - Zoom, line endings and encoding on the right.
-- **Encodings:** ANSI, UTF-8, UTF-8 with BOM, UTF-16 LE/BE, detected the way
-  Windows 10 does it. Line endings are kept as they are.
-- **`.LOG` files** get a timestamp each time they're opened.
-- **Command line:** `RENotepad [/A|/W] [file]`, or `RENotepad /P file` to print
-  to the default printer.
-
-![About RE:Notepad](docs/screenshots/about.png)
 
 ## Updates and privacy
 
@@ -173,34 +208,6 @@ network request is the update check:
 - How to turn it off: *Settings › Check for updates at startup*.
 
 RENotepad never downloads or installs anything by itself.
-
-## Build from source
-
-You need the Rust MSVC toolchain and the Windows SDK, which provides `rc.exe`
-for the icon and version info.
-
-```sh
-cargo build --release          # target\release\RENotepad.exe
-cargo test                     # encoding, find/replace, .LOG, command line, version checks
-pwsh scripts/package.ps1       # dist\: installer, portable zip, SHA256SUMS.txt
-```
-
-`package.ps1` downloads a pinned, hash-checked [Inno Setup](https://jrsoftware.org/isinfo.php)
-into `.tools\` the first time it runs, in portable mode, so nothing is
-installed system-wide. Pushing a version tag (`v0.3.0`) makes GitHub Actions
-run the same script and publish the release.
-
-**UI tests.** `tests/ui/` drives the real exe through window messages without
-ever taking your keyboard or covering your screen. See
-[tests/ui/README.md](tests/ui/README.md).
-
-```sh
-pwsh tests/ui/smoke.ps1     # find/replace/go to, dialogs, layout, tabs, settings
-pwsh tests/ui/menus.ps1     # menu bar keyboard navigation
-pwsh tests/ui/update.ps1    # update check (needs the internet)
-pwsh tests/ui/pins.ps1      # importing Notepad's pins (on made-up jump lists only)
-pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not installed)
-```
 
 ## Known limits
 
@@ -227,7 +234,39 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 - **Left out on purpose:** the formatting toolbar, Copilot, spell check and
   session restore.
 
-## Project layout
+## Build from source
+
+You need the Rust MSVC toolchain and the Windows SDK, which provides `rc.exe`
+for the icon and version info.
+
+```sh
+cargo build --release          # target\release\RENotepad.exe
+cargo test                     # encoding, find/replace, .LOG, Markdown, command line, version checks
+pwsh scripts/package.ps1       # dist\: installer, portable zip, SHA256SUMS.txt
+```
+
+`package.ps1` downloads a pinned, hash-checked [Inno Setup](https://jrsoftware.org/isinfo.php)
+into `.tools\` the first time it runs, in portable mode, so nothing is
+installed system-wide. Pushing a version tag (`v0.5.1`) makes GitHub Actions
+run the same script and publish the release.
+
+**UI tests.** `tests/ui/` drives the real exe through window messages without
+ever taking your keyboard or covering your screen. See
+[tests/ui/README.md](tests/ui/README.md).
+
+```sh
+pwsh tests/ui/smoke.ps1      # find/replace/go to, dialogs, layout, tabs, settings
+pwsh tests/ui/menus.ps1      # menu bar keyboard navigation
+pwsh tests/ui/preview.ps1    # Markdown preview
+pwsh tests/ui/recent.ps1     # File > Recent files (on made-up jump lists only)
+pwsh tests/ui/scrollbars.ps1 # scrollbar fitting while the window resizes
+pwsh tests/ui/update.ps1     # update check (needs the internet)
+pwsh tests/ui/pins.ps1       # importing Notepad's pins (on made-up jump lists only)
+pwsh tests/ui/installer.ps1  # install, reinstall, uninstall (only if not installed)
+pwsh tests/ui/shot.ps1 -Out shot.png  # a screenshot, without taking focus
+```
+
+### Project layout
 
 - `src/main.rs`: entry point and message loop.
 - `src/app.rs`: main window, tabs, menus and commands.
@@ -237,7 +276,8 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
   owner).
 - `src/dialogs.rs`: Find/Replace, the message box, Go to line, About.
 - `src/update.rs`: the update check.
-- `src/jumplist.rs`: the taskbar identity and the pin import from Notepad.
+- `src/jumplist.rs`: the taskbar identity, the jump list and the imports from
+  Notepad.
 - `src/markdown.rs`, `src/preview.rs`: the Markdown preview (Markdown to RTF,
   unit-tested; the read-only RichEdit that shows it).
 - `src/encoding.rs`, `src/text.rs`: the pure rules, unit-tested.
@@ -251,9 +291,12 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 - `re/`: the script that drove REA.
 - `tests/ui/`: the focus-free UI tests.
 
+![About RE:Notepad](docs/screenshots/about.png)
+
 ## Credits
 
 - [REA](https://github.com/morluto/rea) and [Ghidra](https://ghidra-sre.org/) for the reverse engineering.
+- [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) for reading Markdown.
 - [Inno Setup](https://jrsoftware.org/isinfo.php) for the installer.
 - Microsoft, for twenty-odd years of Notepad. RE:Notepad is an independent
   project, not affiliated with or endorsed by Microsoft. Windows and Notepad
@@ -262,40 +305,3 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 ## License
 
 [MIT](LICENSE) © 2026 Nikko Gonzales
-
-## Changelog
-
-<!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
-
-- 2026-11-27 — 0.5.1:
-  - The Markdown preview and the status bar paint correctly when you make the
-    window larger.
-  - A preview link to a network path (`//server/share/file.md`) does nothing:
-    a click could send your Windows sign-in to that server.
-  - *File › Recent files*: a file on an unplugged drive keeps its entry, and
-    opening a file that is already open moves it to the top.
-  - Setup offers to bring over Notepad's pinned files only once, also when you
-    leave the box unchecked.
-- 2026-11-27 — 0.5.0:
-  - Markdown preview: a *Preview* button for `.md` files, also *View › Markdown
-    preview* (Ctrl+Shift+M).
-  - *File › Recent files*: the last 10 files, seeded once from Notepad's
-    recent files.
-  - Fixed a crash when typing with the cursor scrolled out of view (word wrap on).
-- 2026-10-13 — 0.4.0:
-  - Brings over the files pinned to Notepad's taskbar jump list: offered by the
-    installer, and *Settings › Import pinned files from Notepad*. Pins to files
-    that no longer exist are skipped.
-  - *File › Pin to jump list* pins the open file, even with Windows' recent
-    items turned off.
-  - RENotepad has its own taskbar identity, so its jump list stays the same
-    across updates. If you pinned 0.3.0 to the taskbar, unpin it and pin it again.
-- 2026-10-13 — 0.3.0:
-  - Checks GitHub for a newer version at startup and shows a notice in the
-    status bar; *Settings › Check for updates* does it on demand.
-  - Installer and portable zip.
-  - Windows 11 style dialogs for prompts, Go to line and About.
-- 2026-10-13 — 0.2.0: renamed RE:Notepad. Windows 11 look (title bar with tabs,
-  flat menu bar, settings gear, status bar with character count), tabs, Save
-  all, its own icon, an About box with the story.
-- 2026-10-13 — 0.1.0: the full Windows 10 Notepad feature set, dark mode by default.
