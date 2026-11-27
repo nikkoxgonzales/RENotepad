@@ -15,6 +15,7 @@ mod filedlg;
 mod frontmatter;
 mod highlight;
 mod jumplist;
+mod lines;
 mod markdown;
 mod mdhtml;
 #[cfg(test)]
@@ -25,6 +26,7 @@ mod settings;
 mod status;
 mod text;
 mod theme;
+mod undo;
 mod update;
 
 use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};

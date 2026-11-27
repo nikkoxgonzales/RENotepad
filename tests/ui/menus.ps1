@@ -12,7 +12,7 @@ $p = Start-Process $Exe -WindowStyle Hidden -PassThru
 $main = Wait-Top $p.Id 'RENotepad' ([NullString]::Value); Start-Sleep -Milliseconds 300
 Show-Ghost $main
 
-# Items in the open popup: File 13, Edit 17, View 5, settings 6.
+# Items in the open popup: File 17, Edit 19, View 5, settings 6.
 function OpenMenuItems {
   Start-Sleep -Milliseconds 400
   $pop = [Q]::Top($p.Id, '#32768', [NullString]::Value)
@@ -23,7 +23,7 @@ function Key($vk) { [Q]::PostMessageW($main, 0x100, [IntPtr]$vk, [IntPtr]::Zero)
 
 [Q]::PostMessageW($main, 0x112, [IntPtr]0xF100, [IntPtr][int][char]'f') | Out-Null # SC_KEYMENU, Alt+F
 Check 'Alt+F opens File' (OpenMenuItems) 17
-Key 0x27; Check 'Right moves to Edit' (OpenMenuItems) 17
+Key 0x27; Check 'Right moves to Edit' (OpenMenuItems) 19
 Key 0x27; Check 'Right moves to View' (OpenMenuItems) 6
 Key 0x25; Key 0x25; Check 'Left twice is back on File' (OpenMenuItems) 17
 Key 0x25; Check 'Left from File wraps to the gear' (OpenMenuItems) 8

@@ -8,7 +8,7 @@ use crate::encoding::{self, Encoding};
 use crate::explorer::{self, Explorer};
 use crate::settings::{self, Settings};
 use crate::status::{self, Status};
-use crate::{filedlg, jumplist, markdown, muldiv, preview, print, text, theme, update, wide};
+use crate::{filedlg, jumplist, lines, markdown, muldiv, preview, print, text, theme, undo, update, wide};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_IGNORE_MERGE_ERRORS};
@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_DOWN,
-    VK_ESCAPE, VK_LEFT, VK_RIGHT,
+    GetKeyState, VK_CONTROL, VK_DELETE, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_SHIFT,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, PathCompactPathExW, SHAddToRecentDocs, SetWindowSubclass, HDROP, SHARD_PATHW};
 use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -54,6 +54,8 @@ const IDM_REPLACE: u16 = 24;
 const IDM_GOTO: u16 = 25;
 const IDM_SELECT_ALL: u16 = 26;
 const IDM_TIME_DATE: u16 = 27;
+const IDM_REDO: u16 = 28;
+const IDM_DUPLICATE: u16 = 29;
 const IDM_WRAP: u16 = 32;
 const IDM_FONT: u16 = 33;
 const IDM_ZOOM_IN: u16 = 40;
@@ -136,6 +138,23 @@ struct Doc {
     zoom: i32,
     /// The preview's `<details>` blocks that the user toggled (opened or closed).
     details: Vec<u32>,
+    /// A copy of the editor text, kept current at each EN_CHANGE. The diff
+    /// against it gives each change to `hist`, and line commands read it.
+    shadow: Vec<u16>,
+    hist: undo::History,
+    /// The bracket at the caret and its partner, outlined in the editor.
+    brackets: Option<(usize, usize)>,
+}
+
+/// Where `capture` puts the change that it found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// A change of the user: a new undo step.
+    Record,
+    /// Undo took a step back: the change becomes a redo step.
+    Undone,
+    /// Redo took a step back: the change becomes an undo step.
+    Redone,
 }
 
 /// Menu-bar keyboard/mouse navigation while a popup is open. Written by the
@@ -161,6 +180,13 @@ thread_local! {
     /// `confirm_close_all` is prompting. A second close request (taskbar, a queued
     /// Ctrl+Shift+W) reaches us through the prompt's message loop.
     static CLOSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A method that holds `&mut self` changes the editor text and captures the
+    /// change itself: EN_CHANGE must not change the Doc meanwhile (see NAV).
+    static SUPPRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A typed character on its way into the editor: (selection start, end,
+    /// text length, character) from before it. The control replaces the
+    /// selection with the character, so `capture` needs no diff (2 ms at 5 MB).
+    static TYPED: std::cell::Cell<Option<(usize, usize, usize, u16)>> = const { std::cell::Cell::new(None) };
 }
 
 fn nav() -> MenuNav {
@@ -198,6 +224,10 @@ pub struct App {
     hook: HWINEVENTHOOK,
     pub accel: HACCEL,
     pub global_accel: HACCEL,
+    /// The bracket outlines last drawn (client coordinates of the editor), and
+    /// the scroll position then (first visible line, horizontal position).
+    bracket_rects: [Option<RECT>; 2],
+    bracket_scroll: (isize, i32),
     explorer: Explorer,
     /// Dragging the pane splitter: pointer x minus the pane width at the press.
     split_drag: Option<i32>,
@@ -259,6 +289,8 @@ pub fn create(cmd_show: i32, args: &text::Args) -> Option<()> {
             hook: std::ptr::null_mut(),
             accel: accelerators(false),
             global_accel: accelerators(true),
+            bracket_rects: [None, None],
+            bracket_scroll: (0, 0),
             explorer: Explorer::empty(),
             split_drag: None,
             drag_file: None,
@@ -371,6 +403,11 @@ fn accelerators(global: bool) -> HACCEL {
             (cs, b'M' as u16, IDM_PREVIEW),
             (cs, b'E' as u16, IDM_FOLDER_PANE_KEY),
             (c, b'A' as u16, IDM_SELECT_ALL),
+            // Ours, not the Edit control's: Ctrl+Z reached it as a typed character.
+            (c, b'Z' as u16, IDM_UNDO),
+            (cs, b'Z' as u16, IDM_REDO),
+            (c, b'Y' as u16, IDM_REDO),
+            (c, b'D' as u16, IDM_DUPLICATE),
             (FVIRTKEY, VK_F5, IDM_TIME_DATE),
             (c, VK_OEM_PLUS, IDM_ZOOM_IN),
             (c, VK_ADD, IDM_ZOOM_IN),
@@ -418,6 +455,7 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
 
         let edit = CreatePopupMenu();
         add(edit, IDM_UNDO, "&Undo\tCtrl+Z");
+        add(edit, IDM_REDO, "&Redo\tCtrl+Y");
         sep(edit);
         add(edit, IDM_CUT, "Cu&t\tCtrl+X");
         add(edit, IDM_COPY, "&Copy\tCtrl+C");
@@ -432,6 +470,7 @@ fn build_menus() -> ([HMENU; MENU_COUNT], HMENU) {
         sep(edit);
         add(edit, IDM_SELECT_ALL, "Select &all\tCtrl+A");
         add(edit, IDM_TIME_DATE, "Time/&date\tF5");
+        add(edit, IDM_DUPLICATE, "Duplicate l&ine\tCtrl+D");
         sep(edit);
         add(edit, IDM_FONT, "F&ont...");
 
@@ -521,7 +560,10 @@ impl App {
                 style |= WS_HSCROLL;
             }
             let class = wide("Edit");
-            let edit = CreateWindowExW(0, class.as_ptr(), std::ptr::null(), style, 0, 0, 0, 0, self.hwnd, EDIT_ID as HMENU, dialogs::hinstance(), std::ptr::null());
+            // At the editor's size before the text goes in: at width 0 a wrapped
+            // text breaks after each character, and 500 KB took 9 s to wrap.
+            let (x, y, w, h) = self.edit_rect();
+            let edit = CreateWindowExW(0, class.as_ptr(), std::ptr::null(), style, x, y, w, h, self.hwnd, EDIT_ID as HMENU, dialogs::hinstance(), std::ptr::null());
             SendMessageW(edit, EM_SETEXTENDEDSTYLE, ES_EX_ALLOWEOL_ALL | ES_EX_CONVERT_EOL_ON_PASTE | ES_EX_ZOOMABLE, (ES_EX_ALLOWEOL_ALL | ES_EX_CONVERT_EOL_ON_PASTE | ES_EX_ZOOMABLE) as isize);
             SendMessageW(edit, EM_SETLIMITTEXT, 0, 0);
             SendMessageW(edit, WM_SETFONT, self.font as usize, 0);
@@ -529,6 +571,7 @@ impl App {
             SendMessageW(edit, EM_SETENDOFLINE, if text.is_empty() { EC_ENDOFLINE_CRLF } else { EC_ENDOFLINE_DETECTFROMCONTENT }, 0);
             SetWindowSubclass(edit, Some(edit_subclass), 1, 0);
             theme::apply_control(edit, "DarkMode_Explorer");
+            self.pad_edit(edit);
             if !text.is_empty() {
                 set_edit_text(edit, text);
             }
@@ -573,11 +616,8 @@ impl App {
             }
             let edit = self.edit();
             if !edit.is_null() {
-                // An unneeded scrollbar is pushed past the window edge / under the status bar.
-                let (v, h) = self.bars;
-                let extra_w = if v { 0 } else { GetSystemMetricsForDpi(SM_CXVSCROLL, self.dpi) };
-                let extra_h = if h || self.settings.wrap { 0 } else { GetSystemMetricsForDpi(SM_CYHSCROLL, self.dpi) };
-                MoveWindow(edit, left, top, (rc.right - left).max(0) + extra_w, height + extra_h, 1);
+                let (x, y, w, h) = self.edit_rect();
+                MoveWindow(edit, x, y, w, h, 1);
                 self.pad_edit(edit);
             }
             let p = self.preview();
@@ -592,6 +632,23 @@ impl App {
             }
             MoveWindow(self.status.hwnd, 0, rc.bottom - sh, rc.right, sh, 1);
             ShowWindow(self.status.hwnd, if self.settings.status_bar { SW_SHOWNA } else { SW_HIDE });
+        }
+    }
+
+    /// Where the active editor goes: (x, y, width, height) in the client area.
+    fn edit_rect(&self) -> (i32, i32, i32, i32) {
+        unsafe {
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(self.hwnd, &mut rc);
+            let top = self.chrome.top_height();
+            let sh = if self.settings.status_bar { self.status.height() } else { 0 };
+            let height = (rc.bottom - sh - top).max(0);
+            let left = self.editor_left();
+            // An unneeded scrollbar is pushed past the window edge / under the status bar.
+            let (v, h) = self.bars;
+            let extra_w = if v { 0 } else { GetSystemMetricsForDpi(SM_CXVSCROLL, self.dpi) };
+            let extra_h = if h || self.settings.wrap { 0 } else { GetSystemMetricsForDpi(SM_CYHSCROLL, self.dpi) };
+            (left, top, (rc.right - left).max(0) + extra_w, height + extra_h)
         }
     }
 
@@ -682,6 +739,13 @@ impl App {
             rc.left += pad;
             rc.top += pad;
             rc.right = (rc.right - pad).max(rc.left + 1);
+            // The same rect again still wraps the whole text again (about 240 ms
+            // for a 500 KB line), and layout runs after each tab switch.
+            let mut now: RECT = std::mem::zeroed();
+            SendMessageW(edit, EM_GETRECT, 0, &mut now as *mut RECT as isize);
+            if (now.left, now.top, now.right, now.bottom) == (rc.left, rc.top, rc.right, rc.bottom) {
+                return;
+            }
             SendMessageW(edit, EM_SETRECTNP, 0, &rc as *const RECT as isize);
         }
     }
@@ -888,17 +952,245 @@ impl App {
         (s as usize, e as usize)
     }
 
-    fn replace_sel(&self, text: &[u16]) {
-        let mut t = text.to_vec();
+    fn replace_sel(&mut self, text: &[u16]) {
+        self.put_text(None, text, Route::Record);
+    }
+
+    /// Replace `range` (None: the selection) with `with`, and give the change
+    /// to the history by `route`. Undo and redo put back the exact text, so
+    /// for them the control does not convert line breaks.
+    fn put_text(&mut self, range: Option<(usize, usize)>, with: &[u16], route: Route) {
+        let e = self.edit();
+        let mut t = with.to_vec();
         t.push(0);
-        unsafe { SendMessageW(self.edit(), EM_REPLACESEL, 1, t.as_ptr() as isize) };
+        let exact = route != Route::Record;
+        SUPPRESS.with(|f| f.set(true));
+        unsafe {
+            if exact {
+                SendMessageW(e, EM_SETEXTENDEDSTYLE, ES_EX_CONVERT_EOL_ON_PASTE, 0);
+            }
+            if let Some((s, end)) = range {
+                SendMessageW(e, EM_SETSEL, s, end as isize);
+            }
+            SendMessageW(e, EM_REPLACESEL, 0, t.as_ptr() as isize);
+            if exact {
+                SendMessageW(e, EM_SETEXTENDEDSTYLE, ES_EX_CONVERT_EOL_ON_PASTE, ES_EX_CONVERT_EOL_ON_PASTE as isize);
+            }
+        }
+        SUPPRESS.with(|f| f.set(false));
+        self.capture(route);
+    }
+
+    /// Diff the editor text against the tab's copy and give the change to the history.
+    fn capture(&mut self, route: Route) {
+        let e = self.edit();
+        let Some(d) = self.docs.get_mut(self.cur) else { return };
+        let typed = TYPED.with(|t| t.take());
+        let Some(c) = with_edit_text(e, |t| {
+            if let Some((s, end, len, ch)) = typed {
+                if len == d.shadow.len() && s <= end && end <= len && t.len() == len - (end - s) + 1 && t.get(s) == Some(&ch) {
+                    return Some(undo::Change { pos: s, removed: d.shadow[s..end].to_vec(), inserted: vec![ch] });
+                }
+            }
+            undo::diff(&d.shadow, t)
+        }) else {
+            return;
+        };
+        undo::apply(&mut d.shadow, &c);
+        match route {
+            Route::Record => d.hist.record(c),
+            Route::Undone => d.hist.undone(c),
+            Route::Redone => d.hist.redone(c),
+        }
+        // The control's own one-level undo would keep a copy of each deleted text.
+        unsafe { SendMessageW(e, EM_EMPTYUNDOBUFFER, 0, 0) };
+    }
+
+    /// Ctrl+Z / Ctrl+Y: take the last step back.
+    ///
+    /// With word wrap on, the control wraps the text again from the change to
+    /// the end for EM_REPLACESEL, WM_UNDO, Enter and Delete: 85 ms on 500 KB.
+    /// Only a typed character and Backspace wrap a few lines (3 to 5 ms). So a
+    /// short step of plain characters goes back as Backspaces and typed
+    /// characters; a longer step uses EM_REPLACESEL.
+    fn undo(&mut self, redo: bool) {
+        let d = self.doc_mut();
+        let Some(c) = (if redo { d.hist.pop_redo() } else { d.hist.pop_undo() }) else { return };
+        let e = self.edit();
+        let route = if redo { Route::Redone } else { Route::Undone };
+        // No line break (one Backspace takes CR LF) and no surrogate (one may take a pair).
+        let plain = |t: &[u16]| t.len() <= 32 && t.iter().all(|&ch| (ch >= 32 || ch == 9) && !(0xD800..0xE000).contains(&ch));
+        if plain(&c.inserted) && plain(&c.removed) {
+            let end = c.pos + c.inserted.len();
+            SUPPRESS.with(|f| f.set(true));
+            unsafe {
+                SendMessageW(e, EM_SETSEL, end, end as isize);
+                for _ in 0..c.inserted.len() {
+                    SendMessageW(e, WM_CHAR, 8, 1);
+                }
+                for &ch in &c.removed {
+                    SendMessageW(e, WM_CHAR, ch as usize, 1);
+                }
+            }
+            SUPPRESS.with(|f| f.set(false));
+            self.capture(route);
+        } else {
+            self.put_text(Some((c.pos, c.pos + c.inserted.len())), &c.removed, route);
+        }
+        unsafe {
+            // The text that came back is selected, like the control's own undo.
+            SendMessageW(e, EM_SETSEL, c.pos, (c.pos + c.removed.len()) as isize);
+            SendMessageW(e, EM_SCROLLCARET, 0, 0);
+            SendMessageW(e, EM_SETMODIFY, self.doc().hist.modified() as usize, 0);
+        }
+        self.update_title();
+        self.update_status();
+        self.fit_scrollbars();
+    }
+
+    /// Delete with no selection, before a plain character: a step right and a
+    /// Backspace. False: let the control do it (a line break or a surrogate is next).
+    fn fast_delete(&mut self) -> bool {
+        let (s, e) = self.sel();
+        let next = self.doc().shadow.get(s).copied();
+        if s != e || !next.is_some_and(|ch| (ch >= 32 || ch == 9) && !(0xD800..0xE000).contains(&ch)) {
+            return false;
+        }
+        unsafe {
+            SendMessageW(self.edit(), EM_SETSEL, s + 1, (s + 1) as isize);
+            SendMessageW(self.edit(), WM_CHAR, 8, 1);
+        }
+        true
+    }
+
+    /// Replace a range and select the result, as one undo step.
+    fn apply_edit(&mut self, ed: lines::Edit) {
+        self.doc_mut().hist.seal();
+        self.put_text(Some((ed.start, ed.end)), &ed.with, Route::Record);
+        self.doc_mut().hist.seal();
+        unsafe {
+            SendMessageW(self.edit(), EM_SETSEL, ed.sel.0, ed.sel.1 as isize);
+            SendMessageW(self.edit(), EM_SCROLLCARET, 0, 0);
+        }
+    }
+
+    /// Tab and Shift+Tab, from the editor's WM_CHAR. True: handled, no tab
+    /// character. Like VS Code: a selection over lines indents or outdents each
+    /// line, Shift+Tab outdents the caret line, and a text indented with spaces
+    /// gets spaces to the next stop.
+    fn tab_key(&mut self, shift: bool) -> bool {
+        let (s, e) = self.sel();
+        let t = &self.doc().shadow;
+        let (s, e) = (s.min(t.len()), e.min(t.len()));
+        let unit = lines::indent_unit(t);
+        if shift || t[s..e].iter().any(|&c| c == 10 || c == 13) {
+            if let Some(ed) = lines::indent(t, s, e, &unit, shift) {
+                self.apply_edit(ed);
+            }
+            return true;
+        }
+        let col = s - t[..s].iter().rposition(|&c| c == 10 || c == 13).map_or(0, |k| k + 1);
+        match lines::spaces_for_tab(&unit, col) {
+            Some(n) => {
+                self.replace_sel(&vec![32u16; n]);
+                true
+            }
+            None => false,
+        }
+    }
+
+    // ------------------------------------------------------------ brackets
+
+    /// Outline the bracket at the caret and its partner. Invalidates the old
+    /// and new outlines; `paint_brackets` draws them after the control paints.
+    fn update_brackets(&mut self) {
+        let e = self.edit();
+        if e.is_null() || !self.preview().is_null() {
+            return;
+        }
+        let (s, end) = self.sel();
+        let pair = if s == end { lines::match_bracket(&self.doc().shadow, s) } else { None };
+        self.doc_mut().brackets = pair;
+        unsafe {
+            let scroll = (SendMessageW(e, EM_GETFIRSTVISIBLELINE, 0, 0), GetScrollPos(e, SB_HORZ));
+            if scroll != self.bracket_scroll && self.bracket_rects.iter().any(Option::is_some) {
+                // The control scrolled the old outline along with the text.
+                InvalidateRect(e, std::ptr::null(), 0);
+            }
+            for r in self.bracket_rects.iter().flatten() {
+                InvalidateRect(e, r, 0);
+            }
+            for r in self.bracket_cells(e).iter().flatten() {
+                InvalidateRect(e, r, 0);
+            }
+        }
+    }
+
+    /// The editor cells of the outlined brackets that show, in client coordinates.
+    fn bracket_cells(&self, e: HWND) -> [Option<RECT>; 2] {
+        let Some((a, b)) = self.doc().brackets else { return [None, None] };
+        unsafe {
+            let mut view: RECT = std::mem::zeroed();
+            SendMessageW(e, EM_GETRECT, 0, &mut view as *mut RECT as isize);
+            let dc = GetDC(e);
+            let old = SelectObject(dc, self.font as _);
+            let mut tm: TEXTMETRICW = std::mem::zeroed();
+            GetTextMetricsW(dc, &mut tm);
+            SelectObject(dc, old);
+            ReleaseDC(e, dc);
+            let zoom = self.doc().zoom.max(1);
+            let line_h = (tm.tmHeight * zoom / 100).max(1);
+            let pos = |i: usize| -> Option<(i32, i32)> {
+                let r = SendMessageW(e, EM_POSFROMCHAR, i, 0);
+                (r != -1).then_some(((r & 0xFFFF) as i16 as i32, ((r >> 16) & 0xFFFF) as i16 as i32))
+            };
+            let cell = |i: usize| -> Option<RECT> {
+                let (x, y) = pos(i)?;
+                let w = match pos(i + 1) {
+                    Some((x2, y2)) if y2 == y && x2 > x => x2 - x,
+                    _ => (tm.tmAveCharWidth * zoom / 100).max(1),
+                };
+                let r = RECT { left: x, top: y, right: x + w, bottom: y + line_h };
+                (r.right > view.left && r.left < view.right && r.bottom > view.top && r.top < view.bottom).then_some(r)
+            };
+            [cell(a), cell(b)]
+        }
+    }
+
+    /// After the editor paints: draw the bracket outlines over it.
+    fn paint_brackets(&mut self, e: HWND) {
+        if e != self.edit() || !self.preview().is_null() {
+            return;
+        }
+        let cells = self.bracket_cells(e);
+        self.bracket_rects = cells;
+        self.bracket_scroll = unsafe { (SendMessageW(e, EM_GETFIRSTVISIBLELINE, 0, 0), GetScrollPos(e, SB_HORZ)) };
+        if cells.iter().all(Option::is_none) {
+            return;
+        }
+        unsafe {
+            let mut view: RECT = std::mem::zeroed();
+            SendMessageW(e, EM_GETRECT, 0, &mut view as *mut RECT as isize);
+            HideCaret(e);
+            let dc = GetDC(e);
+            IntersectClipRect(dc, view.left, view.top, view.right, view.bottom);
+            let brush = CreateSolidBrush(theme::palette().text_secondary);
+            for r in cells.iter().flatten() {
+                FrameRect(dc, r, brush);
+            }
+            DeleteObject(brush as _);
+            ReleaseDC(e, dc);
+            ShowCaret(e);
+        }
     }
 
     // ------------------------------------------------------------ tabs
 
     fn new_tab(&mut self) {
         let edit = self.make_edit(&[], (0, 0), false, 100);
-        self.docs.push(Doc { edit, preview: std::ptr::null_mut(), encoding: Encoding::Utf8, path: None, zoom: 100, details: Vec::new() });
+        let mut hist = undo::History::default();
+        hist.reset();
+        self.docs.push(Doc { edit, preview: std::ptr::null_mut(), encoding: Encoding::Utf8, path: None, zoom: 100, details: Vec::new(), shadow: Vec::new(), hist, brackets: None });
         self.switch_to(self.docs.len() - 1);
     }
 
@@ -907,6 +1199,7 @@ impl App {
             return;
         }
         self.cur = i;
+        self.bracket_rects = [None, None];
         unsafe {
             for (k, d) in self.docs.iter().enumerate() {
                 if k != i || !d.preview.is_null() {
@@ -1183,8 +1476,9 @@ impl App {
             return;
         }
         self.explorer.forget(path);
-        for d in self.docs.iter().filter(|d| inside(d)) {
+        for d in self.docs.iter_mut().filter(|d| inside(d)) {
             unsafe { SendMessageW(d.edit, EM_SETMODIFY, 1, 0) };
+            d.hist.forget_saved();
         }
         self.update_title();
         self.invalidate_chrome();
@@ -1317,10 +1611,19 @@ impl App {
         };
         let enc = forced.unwrap_or_else(|| encoding::detect(&bytes));
         let content = encoding::decode(&bytes, enc);
+        // A big text needs the vertical bar on any screen. Showing it after the
+        // text is in narrows the text, and a wrapped text wraps again (240 ms
+        // for 500 KB). A wrong guess costs only that: fit_scrollbars corrects it.
+        if self.settings.wrap && content.len() > 200_000 && !self.bars.0 {
+            self.bars.0 = true;
+            self.layout();
+        }
         let e = self.edit();
         unsafe {
             SendMessageW(e, WM_SETREDRAW, 0, 0);
+            SUPPRESS.with(|f| f.set(true));
             set_edit_text(e, &content);
+            SUPPRESS.with(|f| f.set(false));
             SendMessageW(e, EM_SETENDOFLINE, EC_ENDOFLINE_DETECTFROMCONTENT, 0);
             SendMessageW(e, EM_EMPTYUNDOBUFFER, 0, 0);
             SendMessageW(e, EM_SETMODIFY, 0, 0);
@@ -1334,8 +1637,12 @@ impl App {
         d.encoding = enc;
         // The toggled `<details>` numbers belong to the text that this load replaced.
         d.details.clear();
-        if text::is_log_file(&content) {
-            let end = content.len();
+        d.hist.reset();
+        d.brackets = None;
+        let log = text::is_log_file(&content);
+        let end = content.len();
+        d.shadow = content;
+        if log {
             unsafe {
                 SendMessageW(e, EM_SETSEL, end, end as isize);
                 SendMessageW(e, EM_SCROLLCARET, 0, 0);
@@ -1378,6 +1685,7 @@ impl App {
             self.render_preview(self.cur);
         }
         unsafe { SendMessageW(self.edit(), EM_SETMODIFY, 0, 0) };
+        self.doc_mut().hist.mark_saved();
         self.update_title();
         self.invalidate_chrome();
         self.update_status();
@@ -1780,7 +2088,9 @@ impl App {
             let ck = |id: u16, on: bool| {
                 CheckMenuItem(menu, id as u32, MF_BYCOMMAND | if on { MF_CHECKED } else { MF_UNCHECKED });
             };
-            en(IDM_UNDO, editing && SendMessageW(e, EM_CANUNDO, 0, 0) != 0);
+            en(IDM_UNDO, editing && self.doc().hist.can_undo());
+            en(IDM_REDO, editing && self.doc().hist.can_redo());
+            en(IDM_DUPLICATE, editing);
             en(IDM_CUT, editing && has_sel);
             en(IDM_COPY, has_sel);
             en(IDM_DELETE, editing && has_sel);
@@ -1807,6 +2117,15 @@ impl App {
             // the name being renamed. Neither reaches the hidden editor.
             match id {
                 IDM_TIME_DATE => return self.explorer.refresh_all(),
+                // In the rename box, Ctrl+Z is its own undo; the hidden editor gets nothing.
+                IDM_UNDO => {
+                    let f = unsafe { GetFocus() };
+                    if f != self.explorer.hwnd {
+                        unsafe { SendMessageW(f, WM_UNDO, 0, 0) };
+                    }
+                    return;
+                }
+                IDM_REDO | IDM_DUPLICATE => return,
                 IDM_SELECT_ALL => {
                     let f = unsafe { GetFocus() };
                     if f != self.explorer.hwnd {
@@ -1820,7 +2139,7 @@ impl App {
         if (explorer::CMD_FIRST..=explorer::CMD_LAST).contains(&id) {
             return self.tree_command(id);
         }
-        const EDITING_ONLY: [u16; 10] = [IDM_UNDO, IDM_CUT, IDM_PASTE, IDM_DELETE, IDM_FIND, IDM_FIND_NEXT, IDM_FIND_PREV, IDM_REPLACE, IDM_GOTO, IDM_TIME_DATE];
+        const EDITING_ONLY: [u16; 12] = [IDM_UNDO, IDM_REDO, IDM_DUPLICATE, IDM_CUT, IDM_PASTE, IDM_DELETE, IDM_FIND, IDM_FIND_NEXT, IDM_FIND_PREV, IDM_REPLACE, IDM_GOTO, IDM_TIME_DATE];
         if !self.preview().is_null() && EDITING_ONLY.contains(&id) {
             return; // an accelerator: the menu items are greyed out
         }
@@ -1855,8 +2174,13 @@ impl App {
                 }
                 IDM_NEXT_TAB => self.cycle_tab(true),
                 IDM_PREV_TAB => self.cycle_tab(false),
-                IDM_UNDO => {
-                    SendMessageW(e, WM_UNDO, 0, 0);
+                IDM_UNDO => self.undo(false),
+                IDM_REDO => self.undo(true),
+                IDM_DUPLICATE => {
+                    let (s, end) = self.sel();
+                    let t = &self.doc().shadow;
+                    let ed = lines::duplicate(t, s.min(t.len()), end.min(t.len()));
+                    self.apply_edit(ed);
                 }
                 IDM_CUT => {
                     SendMessageW(e, WM_CUT, 0, 0);
@@ -2032,6 +2356,23 @@ fn get_edit_text(edit: HWND) -> Vec<u16> {
         let got = GetWindowTextW(edit, buf.as_mut_ptr(), n + 1);
         buf.truncate(got.max(0) as usize);
         buf
+    }
+}
+
+/// Run `f` on the editor's own text buffer, without a copy (EM_GETHANDLE).
+fn with_edit_text<R>(edit: HWND, f: impl FnOnce(&[u16]) -> R) -> R {
+    use windows_sys::Win32::System::Memory::{LocalLock, LocalUnlock};
+    const EM_GETHANDLE: u32 = 0x00BD;
+    unsafe {
+        let h = SendMessageW(edit, EM_GETHANDLE, 0, 0) as *mut core::ffi::c_void;
+        let n = GetWindowTextLengthW(edit).max(0) as usize;
+        let p = if h.is_null() { std::ptr::null() } else { LocalLock(h) as *const u16 };
+        if p.is_null() {
+            return f(&get_edit_text(edit));
+        }
+        let r = f(std::slice::from_raw_parts(p, n));
+        LocalUnlock(h);
+        r
     }
 }
 
@@ -2307,8 +2648,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             if !from.is_null() && a.docs.iter().any(|d| d.edit == from || d.preview == from) {
                 if lparam as HWND == a.edit() {
                     if code == EN_CHANGE {
+                        if !SUPPRESS.with(|f| f.get()) {
+                            a.capture(Route::Record);
+                        }
                         a.update_title();
                         a.update_status();
+                        a.update_brackets();
                     }
                     if matches!(code, EN_CHANGE | EN_HSCROLL | EN_VSCROLL) {
                         a.fit_scrollbars();
@@ -2470,6 +2815,9 @@ unsafe extern "system" fn caret_event(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_o
         if let Some(a) = try_app() {
             if hwnd == a.edit() {
                 a.update_status();
+                let caret = SendMessageW(hwnd, EM_GETCARETINDEX, 0, 0) as usize;
+                a.doc_mut().hist.caret_moved(caret);
+                a.update_brackets();
                 a.fit_scrollbars(); // typing past the edge scrolls sideways
             }
         }
@@ -2477,7 +2825,38 @@ unsafe extern "system" fn caret_event(_: HWINEVENTHOOK, _: u32, hwnd: HWND, id_o
 }
 
 unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+    const EM_CANUNDO_: u32 = 0x00C6;
+    const EM_UNDO_: u32 = 0x00C7;
+    if let Some(a) = try_app() {
+        if hwnd == a.edit() && a.preview().is_null() {
+            match msg {
+                // The control's context menu: our undo, not its own.
+                WM_UNDO | EM_UNDO_ => {
+                    PostMessageW(GetParent(hwnd), WM_COMMAND, IDM_UNDO as usize, 0);
+                    return 1;
+                }
+                EM_CANUNDO_ => return a.doc().hist.can_undo() as LRESULT,
+                // Plain Delete as a step right and a Backspace: with word wrap on,
+                // the control's Delete wraps to the end of the text (85 ms on 500 KB).
+                WM_KEYDOWN if wparam == VK_DELETE as usize && GetKeyState(VK_SHIFT as i32) >= 0 && GetKeyState(VK_CONTROL as i32) >= 0 && a.fast_delete() => return 0,
+                WM_CHAR if wparam == 9 && !SUPPRESS.with(|f| f.get()) && a.tab_key(GetKeyState(VK_SHIFT as i32) < 0) => return 0,
+                WM_CHAR if wparam >= 32 && !(0xD800..0xE000).contains(&wparam) => {
+                    let (s, e) = a.sel();
+                    TYPED.with(|t| t.set(Some((s, e, GetWindowTextLengthW(hwnd).max(0) as usize, wparam as u16))));
+                    let r = DefSubclassProc(hwnd, msg, wparam, lparam);
+                    TYPED.with(|t| t.set(None));
+                    return r;
+                }
+                _ => {}
+            }
+        }
+    }
     let r = DefSubclassProc(hwnd, msg, wparam, lparam);
+    if msg == WM_PAINT {
+        if let Some(a) = try_app() {
+            a.paint_brackets(hwnd);
+        }
+    }
     if msg == WM_MOUSEWHEEL && (wparam & 0x0008) != 0 {
         // MK_CONTROL: the control just zoomed itself.
         if let Some(a) = try_app() {

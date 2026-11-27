@@ -50,8 +50,12 @@ It's the classic Notepad, minus the extras.
   already open switches to its tab.
 - **File:** New tab, New window, Open, Open folder, Recent files, Save, Save as (with an
   Encoding picker), Save all, Page setup, Print, Close tab, Close window.
-- **Edit:** Undo, Cut, Copy, Paste, Delete, Find, Find next/previous, Replace,
-  Go to, Select all, Time/Date, Font.
+- **Edit:** Undo and Redo (many steps, Ctrl+Z / Ctrl+Y), Cut, Copy, Paste,
+  Delete, Find, Find next/previous, Replace, Go to, Select all, Time/Date,
+  Duplicate line (Ctrl+D), Font.
+- **Editing like a code editor:** Tab and Shift+Tab indent and outdent the
+  selected lines; in a file indented with spaces, Tab types spaces. The bracket
+  at the caret and its partner get a box: `()`, `[]`, `{}`.
 - **View:** Zoom, Status bar, Word wrap, Folder pane, Markdown preview.
 - **Status bar:** line and column, the character count ("5 of 120
   characters" while text is selected), then zoom, line endings and encoding.
