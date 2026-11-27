@@ -1868,7 +1868,7 @@ impl App {
                     }
                 }
                 IDM_CLEAR_RECENT => settings::set_recent(&[]),
-                // By design (DECISIONS 2026-11-27): it works on any tab, not only .md, and
+                // By design: it works on any tab, not only .md, and
                 // Save As to a .txt name keeps the preview on. Print prints the text, as Notepad does.
                 IDM_PREVIEW => self.set_preview(self.preview().is_null()),
                 IDM_OPEN_FOLDER => self.open_folder(),
