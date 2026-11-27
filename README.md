@@ -267,6 +267,15 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-27 — 0.5.1:
+  - The Markdown preview and the status bar paint correctly when you make the
+    window larger.
+  - A preview link to a network path (`//server/share/file.md`) does nothing:
+    a click could send your Windows sign-in to that server.
+  - *File › Recent files*: a file on an unplugged drive keeps its entry, and
+    opening a file that is already open moves it to the top.
+  - Setup offers to bring over Notepad's pinned files only once, also when you
+    leave the box unchecked.
 - 2026-11-27 — 0.5.0:
   - Markdown preview: a *Preview* button for `.md` files, also *View › Markdown
     preview* (Ctrl+Shift+M).
