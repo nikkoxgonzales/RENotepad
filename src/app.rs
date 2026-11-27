@@ -520,7 +520,9 @@ impl App {
             }
             let p = self.preview();
             if !p.is_null() {
-                MoveWindow(p, 0, top, rc.right, (rc.bottom - sh - top).max(0), 1);
+                // RichEdit re-wraps on a resize but repaints only the new strip;
+                // without NOCOPYBITS the old wrap stays on screen while the user drags.
+                SetWindowPos(p, std::ptr::null_mut(), 0, top, rc.right, (rc.bottom - sh - top).max(0), SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
                 self.pad_edit(p);
             }
             MoveWindow(self.status.hwnd, 0, rc.bottom - sh, rc.right, sh, 1);

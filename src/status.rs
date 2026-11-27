@@ -44,6 +44,8 @@ impl Status {
             let class = wide(CLASS);
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                // The fields sit at offsets from the right edge, so a resize repaints all of it.
+                style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(proc_),
                 hInstance: crate::dialogs::hinstance(),
                 hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
