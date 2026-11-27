@@ -687,7 +687,9 @@ impl App {
         let w = self.client_width();
         let md = self.docs.get(self.cur).and_then(|d| d.path.as_deref()).is_some_and(markdown::is_markdown);
         self.chrome.preview = md.then(|| !self.preview().is_null());
-        self.chrome.pane_shown = self.pane_shown();
+        // The setting, not the width: in a narrow window the pane is on but hidden,
+        // and the button and the menu check must still offer to turn it off.
+        self.chrome.pane_shown = self.pane_on();
         self.chrome.layout(w, self.docs.len(), self.cur)
     }
 
@@ -1192,13 +1194,15 @@ impl App {
         }
     }
 
-    /// Drop of a file dragged out of the pane: on the editor or the tab strip opens it.
+    /// Drop of a file dragged out of the pane: on the editor, or on the title bar
+    /// and the menu bar, opens it. The status bar and the pane do not.
     fn end_file_drag(&mut self, x: i32, y: i32) {
         let Some(path) = self.drag_file.take() else { return };
         unsafe { ReleaseCapture() };
         let mut rc: RECT = unsafe { std::mem::zeroed() };
         unsafe { GetClientRect(self.hwnd, &mut rc) };
-        let on_target = x >= 0 && x < rc.right && y >= 0 && y < rc.bottom && (y < self.chrome.top_height() || x >= self.editor_left());
+        let sh = if self.settings.status_bar { self.status.height() } else { 0 };
+        let on_target = x >= 0 && x < rc.right && y >= 0 && y < rc.bottom - sh && (y < self.chrome.top_height() || x >= self.editor_left());
         if on_target {
             self.open_path(&path.to_string_lossy(), None);
         }
@@ -2050,7 +2054,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 return 0;
             }
             if a.drag_file.is_some() {
-                let over_editor = y < a.chrome.top_height() || x >= a.editor_left();
+                let mut rc: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rc);
+                let sh = if a.settings.status_bar { a.status.height() } else { 0 };
+                let over_editor = y < rc.bottom - sh && (y < a.chrome.top_height() || x >= a.editor_left());
                 SetCursor(LoadCursorW(std::ptr::null_mut(), if over_editor { IDC_HAND } else { IDC_NO }));
                 return 0;
             }
@@ -2232,7 +2239,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             if !hdr.hwndFrom.is_null() && hdr.hwndFrom == a.explorer.hwnd {
                 let (r, act) = a.explorer.notify(lparam);
                 if let Some(act) = act {
-                    PostMessageW(hwnd, WM_FOLDER_ACTION, 0, Box::into_raw(Box::new(act)) as isize);
+                    let p = Box::into_raw(Box::new(act));
+                    if PostMessageW(hwnd, WM_FOLDER_ACTION, 0, p as isize) == 0 {
+                        drop(Box::from_raw(p));
+                    }
                 }
                 return r;
             }

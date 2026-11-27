@@ -115,6 +115,13 @@ Remove-Item (Join-Path $Root 'z.txt')
 Wait-For { (Names $rootItem) -notmatch 'z.txt' }
 Check 'a file deleted on disk goes' (Names $rootItem) 'sub,file2.txt,file3.txt,file10.txt'
 
+# A tool that replaces the open file (delete, then write) must not lose its bold.
+Remove-Item (Join-Path $Root 'file2.txt'); Start-Sleep -Milliseconds 700
+Set-Content (Join-Path $Root 'file2.txt') 'y'
+$f2 = [IntPtr]::Zero
+for ($i = 0; $i -lt 40 -and ($f2 -eq [IntPtr]::Zero -or ([T]::State($tree, $f2) -band $TVIS_BOLD) -eq 0); $i++) { Start-Sleep -Milliseconds 100; $f2 = Item 'file2.txt' $rootItem }
+Check 'a replaced open file is bold again' (($f2 -ne [IntPtr]::Zero) -and (([T]::State($tree, $f2) -band $TVIS_BOLD) -ne 0)) $true
+
 # Rename the open file in place: F2, new text in the label editor, then end the edit.
 Select-Item $f2; Key $tree 0x71 # F2
 Wait-For { [Q]::SendMessageW($tree, 0x110F, [IntPtr]::Zero, [IntPtr]::Zero) -ne [IntPtr]::Zero } # TVM_GETEDITCONTROL

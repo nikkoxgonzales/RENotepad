@@ -76,6 +76,9 @@ struct Node {
     wname: Vec<u16>,
     kind: Kind,
     load: Load,
+    /// The sequence number of the newest listing asked for. An older one that
+    /// comes back later is dropped.
+    want: u32,
 }
 
 /// One entry of a listed folder.
@@ -98,6 +101,7 @@ impl Entry {
 
 pub struct Listing {
     gen: u32,
+    seq: u32,
     path: PathBuf,
     /// The shown entries (at most MAX_ITEMS) and how many there are in all.
     result: Result<(Vec<Entry>, usize), String>,
@@ -138,8 +142,14 @@ pub struct Explorer {
     bold: HTREEITEM,
     /// A file to show once the folders on its way have loaded.
     reveal: Option<PathBuf>,
+    /// The active tab's file. When its item is deleted (the file was replaced
+    /// on disk), it is revealed again when it comes back.
+    shown: Option<PathBuf>,
+    /// The last listing sequence number.
+    seq: u32,
     /// A new item to rename once its folder has listed it.
-    edit_after: Option<PathBuf>,
+    /// A new item to rename when its folder lists, and the focus at that time.
+    edit_after: Option<(PathBuf, HWND)>,
     watch_stop: Option<Arc<AtomicBool>>,
     /// System image list indexes by icon key ("<dir>", "<open>" or the lowercase extension).
     icons: HashMap<String, i32>,
@@ -160,6 +170,8 @@ impl Explorer {
             show_hidden: false,
             bold: 0,
             reveal: None,
+            shown: None,
+            seq: 0,
             edit_after: None,
             watch_stop: None,
             icons: HashMap::new(),
@@ -275,7 +287,7 @@ impl Explorer {
             ..Default::default()
         };
         let item = unsafe { SendMessageW(self.hwnd, TVM_INSERTITEMW, 0, &ins as *const _ as isize) };
-        self.nodes.insert(id, Node { item, path, wname: wide(name), name: name.to_string(), kind, load: Load::No });
+        self.nodes.insert(id, Node { item, path, wname: wide(name), name: name.to_string(), kind, load: Load::No, want: 0 });
         id
     }
 
@@ -288,6 +300,7 @@ impl Explorer {
             if let Some(n) = self.nodes.remove(&i) {
                 if n.item == self.bold {
                     self.bold = 0;
+                    self.reveal = self.shown.clone();
                 }
                 stack.extend(self.children(n.item));
             }
@@ -362,12 +375,15 @@ impl Explorer {
         self.list(id);
     }
 
-    fn list(&self, id: isize) {
-        let Some(n) = self.nodes.get(&id) else { return };
+    fn list(&mut self, id: isize) {
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        let Some(n) = self.nodes.get_mut(&id) else { return };
+        n.want = seq;
         let (hwnd, gen, path, hidden) = (self.parent as usize, self.gen, n.path.clone(), self.show_hidden);
         std::thread::spawn(move || {
             let result = list_dir(&path, hidden);
-            post(hwnd, WM_FOLDER_LISTED, Box::new(Listing { gen, path, result }));
+            post(hwnd, WM_FOLDER_LISTED, Box::new(Listing { gen, seq, path, result }));
         });
     }
 
@@ -376,15 +392,16 @@ impl Explorer {
         if l.gen != self.gen {
             return;
         }
-        let Some(id) = self.find(&l.path) else { return };
+        let Some(id) = self.find(&l.path).filter(|i| self.nodes[i].want == l.seq) else { return };
         let item = self.nodes[&id].item;
         match l.result {
             Ok((entries, total)) => self.merge(id, &entries, total),
-            Err(_) => {
+            Err(e) => {
                 for c in self.children(item) {
                     self.delete_item(c);
                 }
-                self.insert(item, Kind::Note, "Can't open this folder", PathBuf::new());
+                let why = e.split(" (os error").next().unwrap_or_default().trim_end_matches('.');
+                self.insert(item, Kind::Note, &format!("Can't open this folder: {why}"), PathBuf::new());
             }
         }
         if let Some(n) = self.nodes.get_mut(&id) {
@@ -393,10 +410,18 @@ impl Explorer {
         let has = !self.children(item).is_empty();
         self.set_children_flag(item, has);
         self.continue_reveal();
-        if let Some(target) = self.edit_after.clone() {
+        if let Some((target, focus)) = self.edit_after.clone() {
+            if self.find(&target).is_none() && target.parent() == Some(l.path.as_path()) {
+                self.edit_after = None; // its folder listed without it (past the cap): no late rename
+            }
             if let Some(new) = self.find(&target) {
                 self.edit_after = None;
                 let item = self.nodes[&new].item;
+                use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
+                // The user went on elsewhere while the folder listed: do not take the focus back.
+                if unsafe { GetFocus() } != focus {
+                    return;
+                }
                 unsafe {
                     SendMessageW(self.hwnd, TVM_SELECTITEM, TVGN_CARET as usize, item);
                     windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(self.hwnd);
@@ -434,7 +459,7 @@ impl Explorer {
 
     /// List again every folder that has listed once.
     pub fn refresh_all(&mut self) {
-        let ids: Vec<isize> = self.nodes.iter().filter(|(_, n)| n.load == Load::Done).map(|(&i, _)| i).collect();
+        let ids: Vec<isize> = self.nodes.iter().filter(|(_, n)| n.load != Load::No).map(|(&i, _)| i).collect();
         for id in ids {
             self.list(id);
         }
@@ -447,7 +472,7 @@ impl Explorer {
         }
         let Some(dirs) = c.dirs else { return self.refresh_all() };
         for d in dirs {
-            if let Some(id) = self.find(&d).filter(|i| self.nodes[i].load == Load::Done) {
+            if let Some(id) = self.find(&d).filter(|i| self.nodes[i].load != Load::No) {
                 self.list(id);
             }
         }
@@ -459,6 +484,7 @@ impl Explorer {
     pub fn reveal(&mut self, path: Option<&Path>) {
         self.set_bold(0);
         self.reveal = path.map(Path::to_path_buf);
+        self.shown = self.reveal.clone();
         self.continue_reveal();
     }
 
@@ -479,10 +505,9 @@ impl Explorer {
             }
             match self.child_named(cur, c) {
                 Some(next) => cur = next,
-                None => {
-                    self.reveal = None; // hidden, past the cap, or gone
-                    return;
-                }
+                // Not there (yet): a Save As to a new name lists after the save.
+                // Stay pending; the next listing of the folder tries again.
+                None => return,
             }
         }
         self.reveal = None;
@@ -494,7 +519,10 @@ impl Explorer {
         }
         let item = self.nodes[&cur].item;
         self.set_bold(item);
-        unsafe { SendMessageW(self.hwnd, TVM_SELECTITEM, TVGN_CARET as usize, item) };
+        // A reveal can finish late (after a listing). A select would end a rename in progress.
+        if unsafe { SendMessageW(self.hwnd, TVM_GETEDITCONTROL, 0, 0) } == 0 {
+            unsafe { SendMessageW(self.hwnd, TVM_SELECTITEM, TVGN_CARET as usize, item) };
+        }
     }
 
     fn set_bold(&mut self, item: HTREEITEM) {
@@ -707,7 +735,7 @@ impl Explorer {
         let path = if folder { unique_name(dir, "New folder", "") } else { unique_name(dir, "New Text Document", ".txt") };
         let made = if folder { std::fs::create_dir(&path) } else { std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map(|_| ()) };
         made.map_err(|e| format!("{}\n{e}", path.display()))?;
-        self.edit_after = Some(path.clone());
+        self.edit_after = Some((path.clone(), unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus() }));
         if let Some(id) = self.find(dir) {
             if self.nodes[&id].load == Load::No {
                 self.load(id);
