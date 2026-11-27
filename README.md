@@ -267,13 +267,12 @@ pwsh tests/ui/installer.ps1 # install, reinstall, uninstall (only if not install
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
-- Unreleased:
+- 2026-11-27 — 0.5.0:
   - Markdown preview: a *Preview* button for `.md` files, also *View › Markdown
     preview* (Ctrl+Shift+M).
   - *File › Recent files*: the last 10 files, seeded once from Notepad's
     recent files.
   - Fixed a crash when typing with the cursor scrolled out of view (word wrap on).
-
 - 2026-10-13 — 0.4.0:
   - Brings over the files pinned to Notepad's taskbar jump list: offered by the
     installer, and *Settings › Import pinned files from Notepad*. Pins to files
