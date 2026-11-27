@@ -2,6 +2,16 @@
 
 <!-- Newest on top. Format: `YYYY-MM-DD — version: what changed`. -->
 
+- 2026-11-28 — 0.8.0:
+  - Undo and redo now have many levels (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z).
+    Undo back to the last save clears the unsaved dot.
+  - Faster with word wrap on. Undo on a 500 KB file takes about 10 ms instead
+    of up to 235 ms. Delete takes about 4 ms instead of 85 ms. Word wrap on a
+    500 KB line takes 0.3 s instead of 4.5 s.
+  - Tab and Shift+Tab indent and outdent the selected lines. In a file indented
+    with spaces, Tab types spaces.
+  - Ctrl+D duplicates the line at the caret or the selected lines.
+  - The bracket at the caret and its partner get a box: `()`, `[]`, `{}`.
 - 2026-11-28 — 0.7.3:
   - The folder pane button at the left of the menu bar now hides when no
     folder is open and the tab has no saved file. A click there could only ask
